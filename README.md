@@ -2,6 +2,8 @@
 
 Personal portfolio site for Christian Tomford. Plain HTML and CSS with no build step.
 
+Live at https://www.christiantomford.com
+
 ## What's here
 
 | Path | What it is |
@@ -13,6 +15,7 @@ Personal portfolio site for Christian Tomford. Plain HTML and CSS with no build 
 | `assets/og-image.jpg` | Preview image shown when the site is shared on LinkedIn, Slack, etc. |
 | `assets/favicon.svg` | Browser tab icon (the Chicago star). |
 | `resume.pdf` | Web copy of the resume, with the phone number removed. |
+| `CNAME` | Tells GitHub Pages the site's domain. GitHub created it; don't delete it. |
 
 ## Updating the resume
 
@@ -37,14 +40,29 @@ Then visit http://localhost:8000.
 
 ## Publishing
 
-Any static host works. Point it at this folder, with no build command and the output directory set to the folder root.
+The site is hosted on GitHub Pages, straight from the `main` branch of this repository (Settings → Pages: deploy from branch `main`, folder `/ (root)`). Every push to `main` redeploys it, usually within a minute or two.
 
-The plan agreed earlier is GitHub plus Vercel:
+To publish a change:
 
-1. Create a GitHub repository (for example `portfolio`) and push this folder to it.
-2. In Vercel, import the repository. Framework preset: **Other**. Leave the build command empty. Output directory: the repository root.
-3. In the Vercel project's domain settings, add `christiantomford.com` and `www.christiantomford.com`. Vercel then shows the DNS records to create.
-4. In Squarespace Domains (account.squarespace.com → Domains → christiantomford.com → DNS), replace the current website records with the ones Vercel shows. Today those are the apex forwarding to `www` and the `www` CNAME to `ghs.googlehosted.com` (the Google Sites placeholder).
-5. **Do not touch the MX or TXT records.** They run Google Workspace email for the domain.
+```bash
+git pull
+git add .
+git commit -m "Describe the change"
+git push
+```
 
-After that, every `git push` to the repository redeploys the site.
+## Domain and DNS
+
+The site's address is `www.christiantomford.com`, set in Settings → Pages and stored in the `CNAME` file. The bare `christiantomford.com` redirects to it. GitHub issues and renews the HTTPS certificate automatically.
+
+The domain is registered at Squarespace, and its DNS is managed there (account.squarespace.com → Domains → christiantomford.com → DNS). The records for the site are:
+
+| Type | Name | Value |
+| --- | --- | --- |
+| A | @ | 185.199.108.153 |
+| A | @ | 185.199.109.153 |
+| A | @ | 185.199.110.153 |
+| A | @ | 185.199.111.153 |
+| CNAME | www | styledsteezy.github.io |
+
+**Do not touch the MX or TXT records, or the `wj4ixiuqgv5h` CNAME.** They run Google Workspace email for the domain.
