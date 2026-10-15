@@ -1,0 +1,1774 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mandelbrot Atlas</title>
+<meta name="description" content="An interactive atlas of the Mandelbrot set and its fractal relatives: real-time WebGL2 rendering, 64-bit deep zoom on Web Workers, orbit tracing and live Julia sets.">
+<meta name="author" content="Christian Tomford">
+<meta name="theme-color" content="#0A2342">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:ital,wght@1,400;1,500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #13233F;
+    --ink-2: #485872;
+    --ink-3: #75819A;
+    --film: rgba(241, 244, 247, 0.9);
+    --film-solid: #F1F4F7;
+    --rule: rgba(19, 35, 63, 0.15);
+    --rule-strong: rgba(19, 35, 63, 0.4);
+    --magenta: #B4206C;
+    --magenta-deep: #8C1452;
+    --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --serif: "IBM Plex Serif", Georgia, "Times New Roman", serif;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: #0A2342; color: var(--ink);
+    font: 400 14px/1.45 var(--sans);
+    -webkit-font-smoothing: antialiased; -webkit-tap-highlight-color: transparent;
+  }
+  button, input { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--magenta); outline-offset: 2px; }
+
+  #view, #overlay { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  #view { cursor: grab; touch-action: none; }
+  #view.dragging { cursor: grabbing; }
+  body.orbiting #view { cursor: crosshair; }
+  #overlay { pointer-events: none; }
+
+  .film {
+    background: var(--film);
+    -webkit-backdrop-filter: blur(12px) saturate(1.1);
+    backdrop-filter: blur(12px) saturate(1.1);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    box-shadow: 0 1px 2px rgba(10, 35, 66, 0.2), 0 10px 30px -14px rgba(10, 35, 66, 0.55);
+  }
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .film { background: rgba(241, 244, 247, 0.97); }
+  }
+
+  .btn {
+    appearance: none; border: 1px solid transparent; background: transparent;
+    border-radius: 3px; padding: 6px 10px; cursor: pointer; white-space: nowrap;
+    font-weight: 500; font-size: 13.5px; line-height: 1.2; color: var(--ink);
+  }
+  .btn:hover { background: rgba(19, 35, 63, 0.08); }
+  .btn[aria-pressed="true"], .btn[aria-selected="true"] { background: var(--ink); color: var(--film-solid); }
+  .btn.primary { background: var(--magenta); color: #fff; padding: 8px 14px; }
+  .btn.primary:hover { background: var(--magenta-deep); }
+  .btn.quiet { color: var(--ink-2); }
+  .btn.small { padding: 4px 8px; font-size: 12.5px; }
+
+  /* Title cartouche: a map's title block, double-ruled */
+  .cartouche { position: fixed; top: 16px; left: 16px; width: min(356px, calc(100vw - 32px)); padding: 16px 18px; z-index: 5; }
+  .cartouche::after { content: ""; position: absolute; inset: 4px; border: 1px solid var(--rule-strong); border-radius: 1px; pointer-events: none; }
+  .titlebar { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .cartouche h1 { font: italic 500 29px/1.05 var(--serif); letter-spacing: -0.01em; margin: 0 0 8px; }
+  .cartouche p { margin: 0 0 14px; color: var(--ink-2); max-width: 38ch; }
+  .math { font-family: var(--serif); font-style: italic; color: var(--ink); white-space: nowrap; }
+  .cta-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; position: relative; z-index: 1; }
+  .menu-btn { display: none; }
+  #juliaNote { margin: 0 0 12px; font-size: 13px; }
+  #juliaNote[hidden] { display: none; }
+
+  .topnav { position: fixed; top: 16px; right: 16px; display: flex; gap: 2px; padding: 4px; z-index: 4; }
+
+  /* Bottom-left dock: tools above the map legend */
+  .dock { position: fixed; left: 16px; bottom: 16px; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; z-index: 4; max-width: calc(100vw - 32px); }
+  .tools { display: flex; gap: 2px; padding: 4px; }
+  .tools .short { display: none; }
+  .hud { padding: 10px 12px 9px; min-width: 250px; max-width: min(440px, calc(100vw - 32px)); font-variant-numeric: tabular-nums; }
+  .scale { display: flex; align-items: center; gap: 9px; margin-bottom: 7px; font-size: 12.5px; color: var(--ink-2); }
+  .scale .bar {
+    height: 6px; width: 100px; border: 1px solid var(--ink);
+    background: linear-gradient(90deg, var(--ink) 0 25%, transparent 25% 50%, var(--ink) 50% 75%, transparent 75%);
+  }
+  .hud-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+  #mag { font-weight: 600; font-size: 15px; }
+  #coords { font-size: 12.5px; color: var(--ink-2); overflow-wrap: anywhere; }
+  .hud-sub { margin-top: 3px; font-size: 12px; color: var(--ink-3); }
+  .hud-sub b { font-weight: 500; color: var(--ink-2); }
+
+  /* Insets, bottom right */
+  .insets { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; align-items: flex-end; gap: 10px; z-index: 4; transition: right .25s cubic-bezier(.2, .8, .2, 1); }
+  body.drawer-open .insets { right: 388px; }
+  .inset { margin: 0; padding: 6px; width: 190px; }
+  .inset[hidden] { display: none; }
+  .inset-canvas { position: relative; width: 176px; height: 118px; border-radius: 2px; overflow: hidden; background: #0A2342; }
+  #twinInset .inset-canvas { height: 176px; }
+  .inset-canvas canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #overviewMarks { cursor: pointer; }
+  #twinMarks { cursor: pointer; touch-action: none; }
+  .inset figcaption { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 6px 2px 1px; font-size: 12px; color: var(--ink-2); line-height: 1.3; }
+  #twinLabel { font-variant-numeric: tabular-nums; }
+
+  /* Drawer */
+  .drawer {
+    position: fixed; top: 16px; right: 16px; bottom: 16px; width: 356px; z-index: 10;
+    display: flex; flex-direction: column; background: rgba(243, 246, 249, 0.95);
+    transform: translateX(calc(100% + 24px)); visibility: hidden;
+    transition: transform .25s cubic-bezier(.2, .8, .2, 1), visibility 0s .25s;
+  }
+  body.drawer-open .drawer { transform: none; visibility: visible; transition: transform .25s cubic-bezier(.2, .8, .2, 1); }
+  .drawer-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 6px 6px 6px 8px; border-bottom: 1px solid var(--rule); }
+  .tabs { display: flex; gap: 2px; }
+  .close { font-size: 20px; line-height: 1; padding: 4px 9px; }
+  .panel { overflow-y: auto; padding: 4px 18px 22px; overscroll-behavior: contain; }
+  .panel[hidden] { display: none; }
+  .panel h2 { font: 600 14.5px/1.3 var(--sans); margin: 20px 0 8px; }
+  .panel p { margin: 0 0 10px; color: var(--ink-2); max-width: 60ch; }
+  .panel ul { margin: 0 0 10px; padding-left: 18px; color: var(--ink-2); }
+  .panel li { margin-bottom: 6px; }
+  .panel .lead { margin-top: 14px; }
+
+  .places { list-style: none; margin: 0; padding: 0; }
+  .places li { border-top: 1px solid var(--rule); margin: 0; }
+  .places li:last-child { border-bottom: 1px solid var(--rule); }
+  .place { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; width: 100%; text-align: left; padding: 10px 6px; background: none; border: 0; cursor: pointer; border-radius: 2px; }
+  .place:hover { background: rgba(19, 35, 63, 0.06); }
+  .place .name { font: italic 500 17px/1.25 var(--serif); color: var(--ink); }
+  .place .depth { font-size: 12.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; align-self: center; }
+  .place .note { grid-column: 1 / -1; font-size: 13px; color: var(--ink-2); line-height: 1.4; }
+
+  .seg { display: flex; flex-wrap: wrap; gap: 2px; padding: 3px; border: 1px solid var(--rule); border-radius: 3px; width: fit-content; }
+  .rule-text { margin: 10px 0 4px; font: italic 400 19px/1.3 var(--serif); color: var(--ink); }
+  .field { margin: 12px 0 6px; }
+  .field label { display: flex; justify-content: space-between; font-size: 13px; color: var(--ink-2); margin-bottom: 2px; }
+  .field output { font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 500; }
+  .field-row { display: flex; align-items: center; gap: 10px; }
+  input[type="range"] { width: 100%; accent-color: var(--magenta); margin: 4px 0; }
+  .check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); margin: 8px 0; cursor: pointer; }
+  .check input { accent-color: var(--magenta); width: 16px; height: 16px; margin: 0; }
+  .swatches { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin: 4px 0 6px; }
+  .swatch { display: flex; flex-direction: column; gap: 4px; align-items: stretch; padding: 4px; border: 1px solid transparent; border-radius: 3px; background: none; cursor: pointer; font-size: 11.5px; color: var(--ink-2); }
+  .swatch span:first-child { height: 22px; border-radius: 2px; box-shadow: inset 0 0 0 1px rgba(19, 35, 63, 0.18); }
+  .swatch[aria-pressed="true"] { border-color: var(--ink); color: var(--ink); }
+  .keys { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0 0 10px; font-size: 13px; color: var(--ink-2); }
+  .keys dt { color: var(--ink); font-weight: 500; }
+  .keys dd { margin: 0; }
+  .byline { margin-top: 22px !important; padding-top: 12px; border-top: 1px solid var(--rule); font-size: 13px; }
+  .panel a { color: var(--magenta-deep); }
+
+  /* Orbit readout, dive captions, toast */
+  .tag { position: fixed; z-index: 3; padding: 6px 9px; font-size: 12.5px; line-height: 1.35; pointer-events: none; max-width: 240px; }
+  .tag[hidden] { display: none; }
+  .tag strong { font-weight: 600; color: var(--ink); display: block; }
+  .tag span { color: var(--ink-2); }
+  .caption { position: fixed; left: 50%; bottom: 148px; transform: translateX(-50%); z-index: 6; width: min(560px, calc(100vw - 32px)); padding: 14px 16px 14px 20px; display: flex; align-items: center; gap: 16px; }
+  .caption[hidden] { display: none; }
+  .caption p { margin: 0; flex: 1; font: italic 400 19px/1.35 var(--serif); color: var(--ink); transition: opacity .3s; }
+  .caption p.swap { opacity: 0; }
+  #toast { position: fixed; left: 50%; top: 22px; transform: translate(-50%, -8px); z-index: 20; background: var(--ink); color: var(--film-solid); padding: 8px 14px; border-radius: 3px; font-size: 13.5px; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); }
+  .nogl { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; color: var(--film-solid); text-align: center; }
+  .nogl[hidden] { display: none; }
+  .nogl p { max-width: 44ch; }
+
+  body.clean .cartouche, body.clean .topnav, body.clean .dock, body.clean .insets, body.clean .caption { display: none; }
+
+  @media (max-width: 720px) {
+    .cartouche { top: 10px; left: 10px; width: calc(100vw - 20px); padding: 12px 14px; }
+    .cartouche h1 { font-size: 23px; margin-bottom: 6px; }
+    .cartouche p { font-size: 13.5px; margin-bottom: 10px; }
+    body.engaged .cartouche p { display: none; }
+    .menu-btn { display: inline-block; }
+    .topnav { display: none; }
+    .dock { left: 10px; right: 10px; bottom: 10px; max-width: none; }
+    .tools { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+    .tools::-webkit-scrollbar { display: none; }
+    .tools .long { display: none; }
+    .tools .short { display: inline; }
+    .inset figcaption { flex-direction: column; align-items: flex-start; font-size: 11.5px; }
+    .hud { min-width: 0; padding: 8px 10px; }
+    .hud-sub { display: none; }
+    .insets { right: 10px; bottom: auto; top: 128px; }
+    body.engaged .insets { top: 96px; }
+    #overviewInset { display: none; }
+    .inset { width: 134px; }
+    .inset-canvas, #twinInset .inset-canvas { width: 120px; height: 120px; }
+    body.drawer-open .insets { right: 10px; }
+    .drawer { top: auto; left: 0; right: 0; bottom: 0; width: auto; height: 68vh; border-radius: 10px 10px 0 0; transform: translateY(105%); }
+    .caption { bottom: 132px; }
+    .caption p { font-size: 17px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .drawer, .insets, .caption p, #toast { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<canvas id="view" role="img" aria-label="Fractal map. Scroll or pinch to zoom, drag to move."></canvas>
+<canvas id="overlay" aria-hidden="true"></canvas>
+<div id="orbitTag" class="tag film" hidden></div>
+
+<header class="cartouche film">
+  <div class="titlebar">
+    <h1>Mandelbrot Atlas</h1>
+    <button class="btn quiet menu-btn" id="menuBtn" aria-controls="drawer" aria-expanded="false">Menu</button>
+  </div>
+  <p>Every coastline on this map is drawn by one rule, <span class="math">z ↦ z² + c</span>, repeated. Scroll or pinch into any edge. It never runs out of detail.</p>
+  <p id="juliaNote" hidden></p>
+  <div class="cta-row">
+    <button class="btn primary" id="diveBtn">Take the dive</button>
+    <button class="btn" id="backBtn" hidden>Back to the Mandelbrot set</button>
+  </div>
+</header>
+
+<nav class="topnav film" aria-label="Panels">
+  <button class="btn" data-open="places">Places</button>
+  <button class="btn" data-open="controls">Controls</button>
+  <button class="btn" data-open="about">How it works</button>
+</nav>
+
+<aside class="drawer film" id="drawer" aria-label="Atlas panel">
+  <div class="drawer-head">
+    <div class="tabs" role="tablist">
+      <button class="btn" role="tab" id="t-places" aria-controls="tab-places" data-tab="places">Places</button>
+      <button class="btn" role="tab" id="t-controls" aria-controls="tab-controls" data-tab="controls">Controls</button>
+      <button class="btn" role="tab" id="t-about" aria-controls="tab-about" data-tab="about">How it works</button>
+    </div>
+    <button class="btn close" id="closeDrawer" aria-label="Close panel">×</button>
+  </div>
+
+  <section class="panel" id="tab-places" role="tabpanel" aria-labelledby="t-places">
+    <p class="lead">Named regions, from the whole set down to a copy of it a trillion times smaller. Pick one to fly there.</p>
+    <div id="placeList"></div>
+  </section>
+
+  <section class="panel" id="tab-controls" role="tabpanel" aria-labelledby="t-controls" hidden>
+    <h2>Fractal</h2>
+    <div class="seg" role="group" aria-label="Fractal family">
+      <button class="btn" data-fam="mandelbrot">Mandelbrot</button>
+      <button class="btn" data-fam="ship">Burning Ship</button>
+      <button class="btn" data-fam="tricorn">Tricorn</button>
+    </div>
+    <p class="rule-text" id="ruleText"></p>
+    <div class="field">
+      <label for="power">Power <output id="powerOut">2.00</output></label>
+      <div class="field-row">
+        <input type="range" id="power" min="2" max="8" step="0.01" value="2">
+        <button class="btn small" id="morphBtn" aria-pressed="false">Morph</button>
+      </div>
+    </div>
+
+    <h2>Detail</h2>
+    <div class="field">
+      <label for="iter">Steps per point <output id="iterOut"></output></label>
+      <input type="range" id="iter" min="0" max="1" step="0.001" value="0.4">
+    </div>
+    <label class="check"><input type="checkbox" id="autoIter" checked> Add steps automatically as you zoom</label>
+
+    <h2>Colors</h2>
+    <div class="swatches" id="swatches"></div>
+    <div class="field">
+      <label for="density">Color density <output id="densityOut"></output></label>
+      <input type="range" id="density" min="0.04" max="0.8" step="0.01" value="0.2">
+    </div>
+    <label class="check"><input type="checkbox" id="contours"> Contour lines, one per step</label>
+    <button class="btn small" id="cycleBtn" aria-pressed="false">Cycle colors</button>
+  </section>
+
+  <section class="panel" id="tab-about" role="tabpanel" aria-labelledby="t-about" hidden>
+    <h2>The rule</h2>
+    <p>Pick a point <span class="math">c</span> on the plane. Start with <span class="math">z = 0</span> and apply <span class="math">z ↦ z² + c</span> over and over. If <span class="math">z</span> stays small forever, <span class="math">c</span> belongs to the set: the solid region. If <span class="math">z</span> runs off to infinity, <span class="math">c</span> is outside, and its color shows how quickly it escaped.</p>
+    <button class="btn small" data-action="orbit">Trace an orbit yourself</button>
+
+    <h2>Why it stops at 2</h2>
+    <p>Once <span class="math">|z|</span> passes 2 it can never come back, so the program stops counting there. The number of steps that took is the point’s escape time.</p>
+
+    <h2>Smooth color</h2>
+    <p>Whole-number step counts paint the plane in hard bands. Subtracting <span class="math">log₂ log |z|</span> turns the count into a continuous value, so colors blend. Contour lines mark where the whole-number count changes.</p>
+
+    <h2>Julia sets</h2>
+    <p>Freeze <span class="math">c</span> and vary the starting point instead, and you get a Julia set. Every point has one. For points inside the Mandelbrot set it is one connected piece; outside, it breaks apart into dust. The Mandelbrot set is a map of which Julia sets hold together.</p>
+    <button class="btn small" data-action="twin">Show the Julia twin</button>
+
+    <h2>Relatives</h2>
+    <p>Change the rule and the coastline changes. Raise the power for Multibrot sets, take absolute values each step for the Burning Ship, or mirror <span class="math">z</span> each step for the Tricorn.</p>
+
+    <h2>How it’s built</h2>
+    <ul>
+      <li>Shallow views run in a WebGL2 fragment shader. Every pixel iterates in parallel on the graphics card, in 32-bit floats.</li>
+      <li>32-bit floats carry about 7 significant digits, which run out near ×10,000. Past that, rendering moves to a pool of Web Workers iterating in 64-bit doubles (about 16 digits), good to roughly ×10¹².</li>
+      <li>Workers stream a coarse preview, then the full image, center first. Results land in a float texture that the GPU colors, so palette changes and color cycling stay instant.</li>
+      <li>Points inside the set stop early, using closed-form tests for the main cardioid and the largest bulb plus cycle detection on the orbit.</li>
+      <li>The view lives in the URL, so any place you find can be shared. One HTML file, no libraries.</li>
+    </ul>
+
+    <h2>Shortcuts</h2>
+    <dl class="keys">
+      <dt>Scroll, pinch</dt><dd>Zoom</dd>
+      <dt>Drag</dt><dd>Move</dd>
+      <dt>Double-click</dt><dd>Zoom in (with Shift, out)</dd>
+      <dt>Arrows, + and −</dt><dd>Move and zoom</dd>
+      <dt>O</dt><dd>Trace orbit</dd>
+      <dt>J</dt><dd>Julia twin</dd>
+      <dt>C</dt><dd>Cycle colors</dd>
+      <dt>R</dt><dd>Reset view</dd>
+      <dt>H</dt><dd>Hide the interface</dd>
+    </dl>
+    <p class="byline">Made by <a href="https://christiantomford.com">Christian Tomford</a>.</p>
+  </section>
+</aside>
+
+<div class="dock">
+  <div class="tools film" role="toolbar" aria-label="Tools">
+    <button class="btn" id="orbitBtn" aria-pressed="false"><span class="long">Trace orbit</span><span class="short">Orbit</span></button>
+    <button class="btn" id="twinBtn" aria-pressed="false"><span class="long">Julia twin</span><span class="short">Julia</span></button>
+    <button class="btn" id="shareBtn"><span class="long">Copy link</span><span class="short">Share</span></button>
+    <button class="btn" id="saveBtn"><span class="long">Save image</span><span class="short">Save</span></button>
+    <button class="btn" id="resetBtn"><span class="long">Reset view</span><span class="short">Reset</span></button>
+  </div>
+  <div class="hud film" aria-live="off">
+    <div class="scale"><div class="bar" id="scaleBar"></div><span id="scaleLabel"></span></div>
+    <div class="hud-main"><span id="mag">×1</span><span id="coords"></span></div>
+    <div class="hud-sub"><span id="engine"></span>, <span id="steps"></span></div>
+  </div>
+</div>
+
+<div class="insets">
+  <figure class="inset film" id="twinInset" hidden>
+    <div class="inset-canvas"><canvas id="twinCanvas"></canvas><canvas id="twinMarks"></canvas></div>
+    <figcaption><span id="twinLabel"></span><button class="btn small" id="twinGo">Explore</button></figcaption>
+  </figure>
+  <figure class="inset film" id="overviewInset">
+    <div class="inset-canvas"><canvas id="overviewCanvas"></canvas><canvas id="overviewMarks" title="Click to jump here"></canvas></div>
+    <figcaption><span>Overview. Click to jump.</span></figcaption>
+  </figure>
+</div>
+
+<div class="caption film" id="caption" hidden>
+  <p id="captionText"></p>
+  <button class="btn" id="stopDive">Stop</button>
+</div>
+<div id="toast" role="status" aria-live="polite"></div>
+<div class="nogl" id="nogl" hidden><p>This atlas draws with WebGL2, which isn’t available in this browser. Try a current version of Chrome, Edge, Firefox or Safari.</p></div>
+
+<!-- 64-bit renderer: runs inside Web Workers, one band of rows per task -->
+<script type="text/plain" id="worker-src">
+'use strict';
+const BAIL = 4096;
+function escapeTime(zx, zy, cx, cy, maxIter, type, power, tol) {
+  const p2 = Math.abs(power - 2) < 1e-4;
+  const lp = Math.log(power);
+  let ckx = zx, cky = zy, lim = 8, cnt = 0;
+  for (let n = 0; n < maxIter; n++) {
+    if (type === 1) { zx = Math.abs(zx); zy = Math.abs(zy); }
+    else if (type === 2) { zy = -zy; }
+    if (p2) {
+      const t = zx * zx - zy * zy + cx;
+      zy = 2 * zx * zy + cy; zx = t;
+    } else {
+      const r2 = zx * zx + zy * zy;
+      if (r2 > 0) {
+        const rp = Math.pow(r2, power * 0.5), th = Math.atan2(zy, zx) * power;
+        zx = rp * Math.cos(th) + cx; zy = rp * Math.sin(th) + cy;
+      } else { zx = cx; zy = cy; }
+    }
+    const m = zx * zx + zy * zy;
+    if (m > BAIL) {
+      const nu = n + 2 - Math.log(Math.log2(m) * 0.5) / lp;
+      return nu > 0 ? nu : 0;
+    }
+    // Brent-style cycle check: an orbit that revisits a checkpoint is trapped inside
+    if (Math.abs(zx - ckx) <= tol && Math.abs(zy - cky) <= tol) return -1;
+    if (++cnt === lim) { cnt = 0; lim *= 2; ckx = zx; cky = zy; }
+  }
+  return -1;
+}
+self.onmessage = (e) => {
+  const t = e.data;
+  const { W, H, row0, rows, x, y, s, type, flip, power, maxIter, julia, jx, jy } = t;
+  const out = new Float32Array(W * rows);
+  const tol = s * 1e-3;
+  const bulbs = !julia && type === 0 && Math.abs(power - 2) < 1e-4;
+  const jcy = jy * flip;
+  for (let r = 0; r < rows; r++) {
+    const j = row0 + r;
+    const my = (y + (j + 0.5 - H / 2) * s) * flip;
+    for (let i = 0; i < W; i++) {
+      const mx = x + (i + 0.5 - W / 2) * s;
+      let v;
+      if (julia) v = escapeTime(mx, my, jx, jcy, maxIter, type, power, tol);
+      else {
+        if (bulbs) {
+          const xq = mx - 0.25, q = xq * xq + my * my;
+          if (q * (q + xq) <= 0.25 * my * my || (mx + 1) * (mx + 1) + my * my <= 0.0625) { out[r * W + i] = -1; continue; }
+        }
+        v = escapeTime(0, 0, mx, my, maxIter, type, power, tol);
+      }
+      out[r * W + i] = v;
+    }
+  }
+  self.postMessage({ gen: t.gen, row0, rows, buf: out }, [out.buffer]);
+};
+</script>
+
+<script>
+(() => {
+'use strict';
+
+/* ---------------------------------------------------------------- helpers */
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const smoothstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+const MINUS = '−';
+const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+const SUP = { '-': '⁻', '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹' };
+const sup = (n) => String(n).split('').map((ch) => SUP[ch] || ch).join('');
+
+function hexRGB(h) { const n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+const rgb01 = (h) => hexRGB(h).map((v) => v / 255);
+
+/* ---------------------------------------------------------------- palettes */
+const PALETTES = {
+  chart: {
+    name: 'Chart', density: 0.2, contours: true,
+    interior: '#E6D5A8', backdrop: '#0A2342',
+    stops: [[0, '#0A2342'], [0.2, '#15457A'], [0.38, '#2E77AD'], [0.52, '#86BED9'], [0.62, '#D3EAF1'], [0.72, '#86BED9'], [0.86, '#245F94'], [1, '#0A2342']],
+  },
+  ember: {
+    name: 'Ember', density: 0.24, contours: false,
+    interior: '#000000', backdrop: '#000000',
+    stops: [[0, '#000000'], [0.16, '#3A0A0C'], [0.36, '#9C1B14'], [0.55, '#E5580E'], [0.72, '#FFC247'], [0.85, '#FFF3D4'], [1, '#000000']],
+  },
+  spectrum: {
+    name: 'Spectrum', density: 0.22, contours: false,
+    interior: '#000000', backdrop: '#000000',
+    stops: [[0, '#2B2A8A'], [0.17, '#1E7AD0'], [0.33, '#2DC3A8'], [0.5, '#A2DF4A'], [0.67, '#F2C02E'], [0.83, '#E5552E'], [1, '#2B2A8A']],
+  },
+  aurora: {
+    name: 'Aurora', density: 0.22, contours: false,
+    interior: '#000000', backdrop: '#070420',
+    stops: [[0, '#070420'], [0.2, '#2A1A5E'], [0.4, '#1C6D8B'], [0.58, '#52D2A3'], [0.72, '#ECF6C6'], [0.86, '#8A4BAF'], [1, '#070420']],
+  },
+  print: {
+    name: 'Print', density: 0.2, contours: true,
+    interior: '#000000', backdrop: '#F4F3EE',
+    stops: [[0, '#F4F3EE'], [0.4, '#D2D1CA'], [0.68, '#6B6A66'], [0.84, '#1E1E1C'], [1, '#F4F3EE']],
+  },
+};
+
+function buildPalette(stops, n = 512) {
+  const st = stops.map(([p, c]) => [p, hexRGB(c)]);
+  const out = new Uint8Array(n * 4);
+  for (let i = 0; i < n; i++) {
+    const t = i / n;
+    let k = 0;
+    while (k < st.length - 2 && t > st[k + 1][0]) k++;
+    const [p0, c0] = st[k], [p1, c1] = st[k + 1];
+    const f = clamp((t - p0) / (p1 - p0), 0, 1);
+    for (let j = 0; j < 3; j++) out[i * 4 + j] = Math.round(c0[j] + (c1[j] - c0[j]) * f);
+    out[i * 4 + 3] = 255;
+  }
+  return out;
+}
+
+/* ---------------------------------------------------------------- fractal families */
+const FAM = {
+  mandelbrot: { label: 'Mandelbrot', type: 0, flip: 1, home: [-0.75, 0, 1.32] },
+  ship: { label: 'Burning Ship', type: 1, flip: -1, home: [-0.48, 0.5, 1.3] },
+  tricorn: { label: 'Tricorn', type: 2, flip: 1, home: [-0.5, 0, 1.78] },
+};
+
+/* ---------------------------------------------------------------- state */
+const S = {
+  family: 'mandelbrot', power: 2, mode: 'm', jc: { x: -0.7269, y: 0.1889 },
+  view: { x: -0.66, y: 0, s: 0.004 }, saved: null,
+  autoIter: true, manualIter: 600,
+  palette: 'chart', density: 0.2, contours: true, offset: 0, cycling: false,
+  orbit: false, orbitPt: null, twin: false, morph: false, hover: null,
+  dive: null,
+};
+
+let cssW = window.innerWidth, cssH = window.innerHeight;
+let dpr = Math.min(window.devicePixelRatio || 1, 2);
+const minDim = () => Math.min(cssW, cssH);
+const sFromR = (r) => r / (minDim() / 2);
+const radius = () => S.view.s * minDim() / 2;
+
+function homeOf(fam = S.family, power = S.power, mode = S.mode) {
+  if (mode === 'j') return { x: 0, y: 0, r: Math.abs(power - 2) < 1e-4 ? 1.55 : 1.4 };
+  const h = FAM[fam].home;
+  const k = clamp(3 - power, 0, 1);
+  return { x: h[0] * k, y: h[1] * k, r: power > 2.01 ? Math.max(1.5, h[2]) : h[2] };
+}
+const magnification = () => homeOf().r / radius();
+
+function iterations() {
+  if (!S.autoIter) return S.manualIter;
+  const k = Math.max(0, Math.log10(Math.max(1, magnification())));
+  let it = 220 + 120 * Math.pow(k, 1.5);
+  if (S.power > 2.01) it *= 0.75;
+  return Math.round(clamp(it, 100, 8000) / 10) * 10;
+}
+
+function fractal() {
+  const f = FAM[S.family];
+  return { type: f.type, flip: f.flip, power: S.power, maxIter: iterations(), julia: S.mode === 'j' ? 1 : 0, jx: S.jc.x, jy: S.jc.y };
+}
+function look() {
+  const p = PALETTES[S.palette];
+  return { density: S.density, offset: S.offset, contours: S.contours ? 0.6 : 0, interior: rgb01(p.interior), backdrop: rgb01(p.backdrop) };
+}
+
+function screenToComplex(px, py) {
+  return { x: S.view.x + (px - cssW / 2) * S.view.s, y: S.view.y - (py - cssH / 2) * S.view.s };
+}
+function complexToScreen(x, y) {
+  return [cssW / 2 + (x - S.view.x) / S.view.s, cssH / 2 - (y - S.view.y) / S.view.s];
+}
+const minS = (x = S.view.x, y = S.view.y) => 1.2e-15 * Math.max(0.5, Math.abs(x), Math.abs(y));
+const maxS = () => sFromR(homeOf().r * 4);
+function clampView(v, quiet = false) {
+  const lo = minS(v.x, v.y);
+  if (v.s < lo) { v.s = lo; if (!quiet) hitFloor(); }
+  v.s = Math.min(v.s, maxS());
+  return v;
+}
+let floorToastAt = 0;
+function hitFloor() {
+  const now = performance.now();
+  if (now - floorToastAt > 4000) { floorToastAt = now; toast('That’s as deep as 64-bit math can go.'); }
+}
+
+/* ---------------------------------------------------------------- WebGL */
+const VS = `#version 300 es
+void main() {
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+const FS_HEAD = `#version 300 es
+precision highp float; precision highp int; precision highp sampler2D;
+uniform vec2 u_res; uniform vec2 u_center; uniform float u_scale; uniform float u_flip;
+uniform int u_type; uniform float u_power; uniform int u_maxIter; uniform int u_julia; uniform vec2 u_jc;
+out vec4 o;
+float escapeNu(vec2 p) {
+  vec2 m = vec2(p.x, p.y * u_flip);
+  vec2 z; vec2 c;
+  bool p2 = abs(u_power - 2.0) < 1e-4;
+  if (u_julia == 1) { z = m; c = vec2(u_jc.x, u_jc.y * u_flip); }
+  else {
+    z = vec2(0.0); c = m;
+    if (u_type == 0 && p2) {
+      float xq = c.x - 0.25; float q = xq * xq + c.y * c.y;
+      if (q * (q + xq) <= 0.25 * c.y * c.y) return -1.0;
+      float xb = c.x + 1.0; if (xb * xb + c.y * c.y <= 0.0625) return -1.0;
+    }
+  }
+  float lp = log(u_power);
+  for (int n = 0; n < u_maxIter; n++) {
+    if (u_type == 1) z = abs(z); else if (u_type == 2) z.y = -z.y;
+    if (p2) z = vec2(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c;
+    else {
+      float r2 = dot(z, z);
+      if (r2 > 0.0) { float th = atan(z.y, z.x) * u_power; z = pow(r2, 0.5 * u_power) * vec2(cos(th), sin(th)) + c; }
+      else z = c;
+    }
+    float m2 = dot(z, z);
+    if (m2 > 4096.0) return max(float(n) + 2.0 - log(log2(m2) * 0.5) / lp, 0.0);
+  }
+  return -1.0;
+}
+`;
+
+const COMPUTE_FS = FS_HEAD + `
+void main() { o = vec4(escapeNu(u_center + (gl_FragCoord.xy - 0.5 * u_res) * u_scale), 0.0, 0.0, 1.0); }`;
+
+const SHADE_FS = FS_HEAD + `
+uniform int u_src;
+uniform sampler2D u_nu; uniform vec2 u_texA; uniform float u_texB; uniform vec2 u_texRes;
+uniform sampler2D u_pal; uniform float u_density; uniform float u_offset; uniform float u_contours;
+uniform vec3 u_interior; uniform vec3 u_backdrop;
+float sampleNu(vec2 frag) {
+  vec2 tp = u_texA + (frag - 0.5 * u_res) * u_texB + 0.5 * u_texRes;
+  if (tp.x < 0.0 || tp.y < 0.0 || tp.x > u_texRes.x || tp.y > u_texRes.y) return -2.0;
+  ivec2 mx = textureSize(u_nu, 0) - 1;
+  vec2 q = tp - 0.5; vec2 i0 = floor(q); vec2 f = q - i0; ivec2 a = ivec2(i0);
+  float v00 = texelFetch(u_nu, clamp(a, ivec2(0), mx), 0).r;
+  float v10 = texelFetch(u_nu, clamp(a + ivec2(1, 0), ivec2(0), mx), 0).r;
+  float v01 = texelFetch(u_nu, clamp(a + ivec2(0, 1), ivec2(0), mx), 0).r;
+  float v11 = texelFetch(u_nu, clamp(a + ivec2(1, 1), ivec2(0), mx), 0).r;
+  if (min(min(v00, v10), min(v01, v11)) < 0.0) return texelFetch(u_nu, clamp(ivec2(floor(tp)), ivec2(0), mx), 0).r;
+  return mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y);
+}
+void main() {
+  float nu = (u_src == 1) ? escapeNu(u_center + (gl_FragCoord.xy - 0.5 * u_res) * u_scale) : sampleNu(gl_FragCoord.xy);
+  float w = fwidth(nu);
+  vec3 col;
+  if (nu < -1.5) col = u_backdrop;
+  else if (nu < 0.0) col = u_interior;
+  else {
+    col = texture(u_pal, vec2(sqrt(nu) * u_density + u_offset, 0.5)).rgb;
+    if (u_contours > 0.0) {
+      float d = abs(fract(nu + 0.5) - 0.5);
+      float line = (1.0 - smoothstep(0.4 * w, 1.4 * w, d)) * (1.0 - smoothstep(0.15, 0.45, w));
+      float lum = dot(col, vec3(0.3, 0.59, 0.11));
+      vec3 ink = lum > 0.42 ? col * 0.42 : mix(col, vec3(1.0), 0.32);
+      col = mix(col, ink, line * u_contours);
+    }
+  }
+  o = vec4(col, 1.0);
+}`;
+
+function makeProgram(gl, fs) {
+  const p = gl.createProgram();
+  for (const [type, src] of [[gl.VERTEX_SHADER, VS], [gl.FRAGMENT_SHADER, fs]]) {
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, src); gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh));
+    gl.attachShader(p, sh);
+  }
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u = {};
+  const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const info = gl.getActiveUniform(p, i); u[info.name] = gl.getUniformLocation(p, info.name); }
+  return { p, u: new Proxy(u, { get: (t, k) => (k in t ? t[k] : null) }) };
+}
+
+class FractalGL {
+  constructor(canvas, { fbo = false } = {}) {
+    const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: false, stencil: false, premultipliedAlpha: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
+    if (!gl) throw new Error('WebGL2 unavailable');
+    this.gl = gl; this.canvas = canvas;
+    this.canFBO = fbo && !!gl.getExtension('EXT_color_buffer_float');
+    this.shadeP = makeProgram(gl, SHADE_FS);
+    this.vao = gl.createVertexArray();
+    this.cpuTex = this.floatTex(1, 1);
+    this.src = { gpu: null, cpu: null };
+    if (this.canFBO) {
+      this.computeP = makeProgram(gl, COMPUTE_FS);
+      this.fbo = gl.createFramebuffer();
+      this.gpuTex = this.floatTex(1, 1);
+      this.gpuSize = [1, 1];
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.gpuTex, 0);
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) this.canFBO = false;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+    this.palTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.palTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  }
+  floatTex(w, h, data = null) {
+    const gl = this.gl, t = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, w, h, 0, gl.RED, gl.FLOAT, data);
+    return t;
+  }
+  setPalette(rgba) {
+    const gl = this.gl;
+    gl.bindTexture(gl.TEXTURE_2D, this.palTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, rgba.length / 4, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+  }
+  setFractal(prog, f) {
+    const gl = this.gl, u = prog.u;
+    gl.uniform1f(u.u_flip, f.flip);
+    gl.uniform1i(u.u_type, f.type);
+    gl.uniform1f(u.u_power, f.power);
+    gl.uniform1i(u.u_maxIter, f.maxIter);
+    gl.uniform1i(u.u_julia, f.julia);
+    gl.uniform2f(u.u_jc, f.jx, f.jy);
+  }
+  // 32-bit pass: escape values for every texel of a w×h float texture
+  computeGPU(f, view, w, h) {
+    const gl = this.gl;
+    gl.bindTexture(gl.TEXTURE_2D, this.gpuTex);
+    if (this.gpuSize[0] !== w || this.gpuSize[1] !== h) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, w, h, 0, gl.RED, gl.FLOAT, null);
+      this.gpuSize = [w, h];
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
+    gl.viewport(0, 0, w, h);
+    gl.useProgram(this.computeP.p);
+    const u = this.computeP.u;
+    gl.uniform2f(u.u_res, w, h);
+    gl.uniform2f(u.u_center, view.x, view.y);
+    gl.uniform1f(u.u_scale, view.s);
+    this.setFractal(this.computeP, f);
+    gl.bindVertexArray(this.vao);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.src.gpu = { tex: this.gpuTex, x: view.x, y: view.y, s: view.s, w, h };
+  }
+  // 64-bit results arrive from the workers as Float32 escape values
+  setCPU(buf, w, h, x, y, s) {
+    const gl = this.gl;
+    gl.bindTexture(gl.TEXTURE_2D, this.cpuTex);
+    const c = this.src.cpu;
+    if (c && c.w === w && c.h === h) gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, w, h, gl.RED, gl.FLOAT, buf);
+    else gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, w, h, 0, gl.RED, gl.FLOAT, buf);
+    this.src.cpu = { tex: this.cpuTex, x, y, s, w, h };
+  }
+  updateCPURows(buf, w, row0, rows) {
+    const gl = this.gl;
+    gl.bindTexture(gl.TEXTURE_2D, this.cpuTex);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, row0, w, rows, gl.RED, gl.FLOAT, buf, row0 * w);
+  }
+  // Color pass: map escape values through the palette (src: 'gpu' | 'cpu' | 'direct' | 'none')
+  shade(center, sDev, srcName, f, lk) {
+    const gl = this.gl, P = this.shadeP, u = P.u;
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    gl.useProgram(P.p);
+    gl.uniform2f(u.u_res, this.canvas.width, this.canvas.height);
+    gl.uniform2f(u.u_center, center.x, center.y);
+    gl.uniform1f(u.u_scale, sDev);
+    this.setFractal(P, f);
+    const src = srcName === 'gpu' || srcName === 'cpu' ? this.src[srcName] : null;
+    gl.uniform1i(u.u_src, srcName === 'direct' ? 1 : 0);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, src ? src.tex : this.cpuTex);
+    gl.uniform1i(u.u_nu, 0);
+    if (src) {
+      gl.uniform2f(u.u_texA, (center.x - src.x) / src.s, (center.y - src.y) / src.s);
+      gl.uniform1f(u.u_texB, sDev / src.s);
+      gl.uniform2f(u.u_texRes, src.w, src.h);
+    } else {
+      gl.uniform2f(u.u_texA, 0, 0); gl.uniform1f(u.u_texB, 1); gl.uniform2f(u.u_texRes, 0, 0);
+    }
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.palTex);
+    gl.uniform1i(u.u_pal, 1);
+    gl.uniform1f(u.u_density, lk.density);
+    gl.uniform1f(u.u_offset, lk.offset);
+    gl.uniform1f(u.u_contours, lk.contours);
+    gl.uniform3fv(u.u_interior, lk.interior);
+    gl.uniform3fv(u.u_backdrop, lk.backdrop);
+    gl.bindVertexArray(this.vao);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+}
+
+/* ---------------------------------------------------------------- canvases */
+const view = $('#view'), overlay = $('#overlay'), octx = overlay.getContext('2d');
+let R, overviewGL, twinGL;
+try {
+  R = new FractalGL(view, { fbo: true });
+  overviewGL = new FractalGL($('#overviewCanvas'));
+  twinGL = new FractalGL($('#twinCanvas'));
+} catch (err) {
+  console.error(err);
+  $('#nogl').hidden = false;
+  $$('.cartouche, .topnav, .dock, .insets').forEach((el) => { el.hidden = true; });
+  return;
+}
+const ovMarks = $('#overviewMarks'), ovCtx = ovMarks.getContext('2d');
+const twMarks = $('#twinMarks'), twCtx = twMarks.getContext('2d');
+
+function sizeCanvas(c, w, h, ratio) {
+  const W = Math.max(1, Math.round(w * ratio)), H = Math.max(1, Math.round(h * ratio));
+  if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
+}
+function resize() {
+  const oldMin = minDim();
+  cssW = window.innerWidth; cssH = window.innerHeight;
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  sizeCanvas(view, cssW, cssH, dpr);
+  sizeCanvas(overlay, cssW, cssH, dpr);
+  octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  for (const c of [$('#overviewCanvas'), ovMarks]) sizeCanvas(c, c.clientWidth || 176, c.clientHeight || 118, dpr);
+  for (const c of [$('#twinCanvas'), twMarks]) sizeCanvas(c, c.clientWidth || 176, c.clientHeight || 176, dpr);
+  if (oldMin && oldMin !== minDim()) S.view.s *= oldMin / minDim(); // keep the same region framed
+  dirty.geom = dirty.view = dirty.insets = dirty.twin = true;
+}
+
+/* ---------------------------------------------------------------- 64-bit worker pool */
+const SPEC_KEYS = ['x', 'y', 's', 'W', 'H', 'type', 'power', 'maxIter', 'julia', 'jx', 'jy'];
+const Deep = {
+  ok: true, pool: null, idle: [], queue: [], gen: 0, job: null, cur: null, lastCoarse: null,
+  costPerPx: 0.0004, threads: 0, progress: 1,
+  init() {
+    if (this.pool || !this.ok) return;
+    try {
+      const n = clamp(navigator.hardwareConcurrency || 4, 2, 16);
+      const url = URL.createObjectURL(new Blob([$('#worker-src').textContent], { type: 'text/javascript' }));
+      this.pool = [];
+      for (let i = 0; i < n; i++) {
+        const w = new Worker(url);
+        w.onmessage = (e) => this.done(w, e.data);
+        w.onerror = (e) => { console.error(e); this.ok = false; };
+        this.pool.push(w); this.idle.push(w);
+      }
+      this.threads = n;
+    } catch (err) {
+      console.error(err);
+      this.ok = false; this.pool = null;
+    }
+  },
+  spec() {
+    const cs = Math.min(window.devicePixelRatio || 1, 1.5);
+    const f = fractal();
+    return {
+      x: S.view.x, y: S.view.y, s: S.view.s / cs,
+      W: Math.max(8, Math.round(cssW * cs)), H: Math.max(8, Math.round(cssH * cs)),
+      type: f.type, flip: f.flip, power: f.power, maxIter: f.maxIter, julia: f.julia, jx: f.jx, jy: f.jy,
+    };
+  },
+  same(a, b) { if (!a || !b) return false; for (const k of SPEC_KEYS) if (a[k] !== b[k]) return false; return true; },
+  abort() { this.gen++; this.queue.length = 0; this.job = null; },
+  reset() { this.abort(); this.cur = null; this.lastCoarse = null; R.src.cpu = null; this.progress = 1; },
+  sync(moving) {
+    if (!this.pool) return;
+    const sp = this.spec(), j = this.job;
+    if (j) {
+      if (this.same(j.spec, sp)) return;
+      if (j.phase === 'coarse') return;        // let the preview land, then catch up
+      this.abort();
+    }
+    if (this.cur && this.same(this.cur.spec, sp) && (this.cur.full || moving)) return;
+    this.start(sp, moving);
+  },
+  start(sp, moving) {
+    const job = { gen: ++this.gen, spec: sp, t0: performance.now() };
+    this.job = job;
+    if (this.lastCoarse && this.same(this.lastCoarse.spec, sp)) return this.startFine(job);
+    // size the preview so it costs ~40 ms while moving, ~110 ms when still
+    let k = Math.ceil(Math.sqrt(sp.W * sp.H * this.costPerPx / (moving ? 40 : 110)));
+    k = clamp(k, moving ? 2 : 1, 12);
+    if (k === 1) return this.startFine(job);
+    job.phase = 'coarse'; job.k = k;
+    job.cw = Math.ceil(sp.W / k); job.ch = Math.ceil(sp.H / k);
+    job.buf = new Float32Array(job.cw * job.ch);
+    this.enqueue(job, job.cw, job.ch, sp.s * k, Math.max(1, Math.ceil(job.ch / (this.threads * 3))));
+  },
+  startFine(job) {
+    const sp = job.spec;
+    job.phase = 'fine'; job.tf = performance.now();
+    job.full = new Float32Array(sp.W * sp.H);
+    resampleInto(job.full, sp, this.cur);    // keep showing the preview underneath
+    this.cur = { buf: job.full, w: sp.W, h: sp.H, x: sp.x, y: sp.y, s: sp.s, spec: sp, full: false };
+    R.setCPU(job.full, sp.W, sp.H, sp.x, sp.y, sp.s);
+    this.progress = 0; dirty.shade = dirty.hud = true;
+    this.enqueue(job, sp.W, sp.H, sp.s, Math.max(2, Math.ceil(sp.H / (this.threads * 10))));
+  },
+  enqueue(job, W, H, s, rowsPer) {
+    const sp = job.spec, tasks = [];
+    for (let r = 0; r < H; r += rowsPer) {
+      tasks.push({ gen: job.gen, row0: r, rows: Math.min(rowsPer, H - r), W, H, x: sp.x, y: sp.y, s,
+        type: sp.type, flip: sp.flip, power: sp.power, maxIter: sp.maxIter, julia: sp.julia, jx: sp.jx, jy: sp.jy });
+    }
+    tasks.sort((a, b) => Math.abs(a.row0 + a.rows / 2 - H / 2) - Math.abs(b.row0 + b.rows / 2 - H / 2));
+    job.pending = job.total = tasks.length;
+    this.queue = tasks;
+    this.pump();
+  },
+  pump() { while (this.idle.length && this.queue.length) this.idle.pop().postMessage(this.queue.shift()); },
+  done(w, d) {
+    this.idle.push(w);
+    const job = this.job;
+    if (job && d.gen === job.gen) {
+      if (job.phase === 'coarse') {
+        job.buf.set(d.buf, d.row0 * job.cw);
+        if (--job.pending === 0) this.coarseDone(job);
+      } else {
+        job.full.set(d.buf, d.row0 * job.spec.W);
+        R.updateCPURows(job.full, job.spec.W, d.row0, d.rows);
+        job.pending--;
+        this.progress = 1 - job.pending / job.total;
+        dirty.shade = dirty.hud = true;
+        if (job.pending === 0) this.fineDone(job);
+      }
+    }
+    this.pump();
+  },
+  coarseDone(job) {
+    const sp = job.spec;
+    this.costPerPx = lerp(this.costPerPx, (performance.now() - job.t0) / (job.cw * job.ch), 0.5);
+    const geo = { buf: job.buf, w: job.cw, h: job.ch, x: sp.x, y: sp.y, s: sp.s * job.k };
+    this.cur = { ...geo, spec: sp, full: false };
+    this.lastCoarse = { ...geo, spec: sp };
+    R.setCPU(geo.buf, geo.w, geo.h, geo.x, geo.y, geo.s);
+    this.job = null;
+    dirty.shade = dirty.hud = true;
+  },
+  fineDone(job) {
+    const now = performance.now();
+    this.costPerPx = lerp(this.costPerPx, (now - job.tf) / (job.spec.W * job.spec.H), 0.3);
+    this.cur.full = true; this.job = null; this.progress = 1;
+    this.lastMs = now - job.t0;
+    dirty.hud = true;
+  },
+};
+
+// nearest-neighbour copy of what is currently on screen into a new grid
+function resampleInto(dst, sp, src) {
+  if (!src) { dst.fill(-2); return; }
+  const b = sp.s / src.s;
+  const ax = (sp.x - src.x) / src.s + src.w / 2 + (0.5 - sp.W / 2) * b;
+  const ay = (sp.y - src.y) / src.s + src.h / 2 + (0.5 - sp.H / 2) * b;
+  const sb = src.buf;
+  for (let j = 0; j < sp.H; j++) {
+    const tj = Math.floor(ay + j * b);
+    const row = j * sp.W;
+    if (tj < 0 || tj >= src.h) { dst.fill(-2, row, row + sp.W); continue; }
+    const srow = tj * src.w;
+    for (let i = 0; i < sp.W; i++) {
+      const ti = Math.floor(ax + i * b);
+      dst[row + i] = ti >= 0 && ti < src.w ? sb[srow + ti] : -2;
+    }
+  }
+}
+
+/* ---------------------------------------------------------------- rendering loop */
+const dirty = { geom: true, shade: true, view: true, insets: true, twin: true, hud: true };
+let deepMode = false, lastMove = -1e9, lastFrame = performance.now();
+let motionScale = 0.8, lastScale = 1, morphPhase = 0;
+const GPU_TO_CPU = 4e-7, CPU_TO_GPU = 5e-7; // complex units per CSS pixel
+
+function moved() { lastMove = performance.now(); dirty.geom = dirty.view = dirty.hud = true; }
+function paramsChanged() {
+  dirty.geom = dirty.view = dirty.insets = dirty.twin = dirty.hud = true;
+  syncControls(); scheduleHash();
+}
+
+function updateMode() {
+  const want = Deep.ok && (deepMode ? S.view.s < CPU_TO_GPU : S.view.s < GPU_TO_CPU);
+  if (want === deepMode) return;
+  deepMode = want;
+  if (deepMode) { Deep.init(); if (!Deep.pool) deepMode = false; }
+  else Deep.reset();
+  if (deepMode && S.dive && S.dive.deepAt == null) S.dive.deepAt = Math.log10(magnification());
+  dirty.geom = dirty.hud = true;
+}
+
+function draw(moving) {
+  const f = fractal();
+  const center = { x: S.view.x, y: S.view.y };
+  const sDev = S.view.s * cssW / view.width;
+  const lk = look();
+  if (!deepMode) {
+    if (R.canFBO) {
+      const sc = moving ? motionScale : 1;
+      if (dirty.geom || sc !== lastScale) {
+        const fw = Math.max(1, Math.round(view.width * sc)), fh = Math.max(1, Math.round(view.height * sc));
+        R.computeGPU({ ...f, maxIter: Math.min(f.maxIter, 4000) }, { x: center.x, y: center.y, s: sDev * view.width / fw }, fw, fh);
+        lastScale = sc;
+      }
+      R.shade(center, sDev, 'gpu', f, lk);
+    } else {
+      R.shade(center, sDev, 'direct', { ...f, maxIter: Math.min(f.maxIter, 4000) }, lk);
+      lastScale = 1;
+    }
+  } else {
+    R.shade(center, sDev, R.src.cpu ? 'cpu' : (R.src.gpu ? 'gpu' : 'none'), f, lk);
+  }
+  dirty.geom = dirty.shade = false;
+}
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(100, now - lastFrame);
+  lastFrame = now;
+  if (flight) stepFlight(now);
+  if (momentum) stepMomentum(dt);
+  if (S.morph) { morphPhase += dt * 0.0005; setPower(3.5 - 1.5 * Math.cos(morphPhase), true); }
+  if (S.cycling) { S.offset = (S.offset + dt * 0.00005) % 1; dirty.shade = true; dirty.insets = true; }
+  const moving = now - lastMove < 160;
+  updateMode();
+  if (deepMode) Deep.sync(moving);
+  if (!moving && !deepMode && lastScale !== 1) dirty.geom = true;
+  if (dirty.geom || dirty.shade) {
+    if (moving && !deepMode && R.canFBO) adaptScale(dt);
+    draw(moving);
+  }
+  if (dirty.view) { drawOrbit(); drawOverviewMarks(); dirty.view = false; scheduleHash(); }
+  if (dirty.hud) { updateHUD(); dirty.hud = false; }
+  if (dirty.insets) renderOverview();
+  if (dirty.insets || dirty.twin) renderTwin();
+  dirty.insets = dirty.twin = false;
+  if (S.dive) updateCaption();
+}
+
+// keep motion smooth on slower GPUs by computing fewer pixels while moving
+function adaptScale(dt) {
+  if (dt > 26) motionScale -= 0.08; else if (dt < 18) motionScale += 0.03;
+  motionScale = Math.round(clamp(motionScale, 0.35, 1) * 20) / 20;
+}
+
+/* ---------------------------------------------------------------- HUD */
+function fmtMag(m) {
+  if (m < 10) return m.toFixed(1);
+  if (m < 1e6) return Math.round(m).toLocaleString('en-US');
+  const units = [[1e15, 'quadrillion'], [1e12, 'trillion'], [1e9, 'billion'], [1e6, 'million']];
+  for (const [v, w] of units) if (m >= v) return `${(m / v).toPrecision(m / v >= 100 ? 3 : 2)} ${w}`;
+  return String(m);
+}
+const fmtSigned = (v, d) => (v < 0 ? MINUS : '') + Math.abs(v).toFixed(d);
+function fmtComplex(x, y, d) { return `${fmtSigned(x, d)} ${y < 0 ? MINUS : '+'} ${Math.abs(y).toFixed(d)}i`; }
+function fmtLen(n, e) {
+  if (e >= -3 && e <= 3) { const v = n * Math.pow(10, e); return v >= 1 ? String(v) : v.toFixed(-e); }
+  return `${n} × 10${sup(e < 0 ? '-' + -e : e)}`;
+}
+function updateHUD() {
+  const s = S.view.s;
+  $('#mag').textContent = '×' + fmtMag(magnification());
+  const d = clamp(Math.ceil(-Math.log10(s)) + 1, 3, 17);
+  $('#coords').textContent = `${S.mode === 'j' ? 'z' : 'c'} = ${fmtComplex(S.view.x, S.view.y, d)}`;
+  const target = 110 * s, e = Math.floor(Math.log10(target)), base = target / Math.pow(10, e);
+  const n = base >= 5 ? 5 : base >= 2 ? 2 : 1;
+  $('#scaleBar').style.width = `${(n * Math.pow(10, e)) / s}px`;
+  $('#scaleLabel').textContent = fmtLen(n, e);
+  let eng;
+  if (deepMode) {
+    eng = `64-bit math on ${Deep.threads} CPU threads`;
+    if (Deep.progress < 1) eng += ` (${Math.round(Deep.progress * 100)}%)`;
+  } else eng = '32-bit math on the graphics card';
+  $('#engine').textContent = eng;
+  $('#steps').textContent = `up to ${iterations().toLocaleString('en-US')} steps per point`;
+}
+
+/* ---------------------------------------------------------------- insets */
+let ovView = null;
+function renderOverview() {
+  if ($('#overviewInset').offsetParent === null) return;
+  const c = $('#overviewCanvas'), h = homeOf();
+  const s = (h.r * 1.08) / (Math.min(c.width, c.height) / 2);
+  ovView = { x: h.x, y: h.y, s };
+  overviewGL.shade({ x: h.x, y: h.y }, s, 'direct', { ...fractal(), maxIter: 250 }, look());
+  drawOverviewMarks();
+}
+function drawOverviewMarks() {
+  if (!ovView) return;
+  const c = ovMarks, k = dpr, ctx = ovCtx;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, c.width, c.height);
+  const toPx = (x, y) => [c.width / 2 + (x - ovView.x) / ovView.s, c.height / 2 - (y - ovView.y) / ovView.s];
+  const [cx, cy] = toPx(S.view.x, S.view.y);
+  const w = (cssW * S.view.s) / ovView.s, h = (cssH * S.view.s) / ovView.s;
+  ctx.lineWidth = 1.5 * k;
+  if (w > 7 * k) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 3 * k;
+    ctx.strokeRect(cx - w / 2, cy - h / 2, w, h);
+    ctx.strokeStyle = '#B4206C'; ctx.lineWidth = 1.5 * k;
+    ctx.strokeRect(cx - w / 2, cy - h / 2, w, h);
+  } else {
+    ctx.strokeStyle = 'rgba(255,255,255,0.95)'; ctx.lineWidth = 3 * k;
+    for (const pass of [0, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(cx - 9 * k, cy); ctx.lineTo(cx - 3 * k, cy); ctx.moveTo(cx + 3 * k, cy); ctx.lineTo(cx + 9 * k, cy);
+      ctx.moveTo(cx, cy - 9 * k); ctx.lineTo(cx, cy - 3 * k); ctx.moveTo(cx, cy + 3 * k); ctx.lineTo(cx, cy + 9 * k);
+      ctx.stroke();
+      ctx.strokeStyle = '#B4206C'; ctx.lineWidth = 1.5 * k;
+      if (pass) break;
+    }
+  }
+}
+function twinC() { return S.hover || { x: S.view.x, y: S.view.y }; }
+let twView = null;
+function renderTwin() {
+  const inset = $('#twinInset');
+  const show = S.twin || S.mode === 'j';
+  inset.hidden = !show;
+  if (!show) return;
+  const c = $('#twinCanvas');
+  const f = fractal();
+  if (S.mode === 'm') {
+    const p = twinC();
+    const r = Math.abs(S.power - 2) < 1e-4 ? 1.6 : 1.45;
+    twView = null;
+    twinGL.shade({ x: 0, y: 0 }, r / (Math.min(c.width, c.height) / 2), 'direct', { ...f, julia: 1, jx: p.x, jy: p.y, maxIter: 300 }, look());
+    $('#twinLabel').innerHTML = `Julia set at<br>${fmtComplex(p.x, p.y, 3)}`;
+    $('#twinGo').textContent = 'Explore';
+  } else {
+    const h = homeOf(S.family, S.power, 'm');
+    twView = { x: h.x, y: h.y, s: (h.r * 1.08) / (Math.min(c.width, c.height) / 2) };
+    twinGL.shade({ x: h.x, y: h.y }, twView.s, 'direct', { ...f, julia: 0, maxIter: 250 }, look());
+    $('#twinLabel').textContent = 'Drag to move c';
+    $('#twinGo').textContent = 'Back';
+  }
+  drawTwinMarks();
+}
+function drawTwinMarks() {
+  const ctx = twCtx, c = twMarks, k = dpr;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, c.width, c.height);
+  if (S.mode !== 'j' || !twView) return;
+  const x = c.width / 2 + (S.jc.x - twView.x) / twView.s, y = c.height / 2 - (S.jc.y - twView.y) / twView.s;
+  ctx.beginPath(); ctx.arc(x, y, 6 * k, 0, Math.PI * 2);
+  ctx.lineWidth = 4 * k; ctx.strokeStyle = 'rgba(255,255,255,0.95)'; ctx.stroke();
+  ctx.lineWidth = 2 * k; ctx.strokeStyle = '#B4206C'; ctx.stroke();
+}
+
+/* ---------------------------------------------------------------- orbit tracer */
+function computeOrbit(pt) {
+  const fam = FAM[S.family], flip = fam.flip, P = S.power, p2 = Math.abs(P - 2) < 1e-4;
+  let zx, zy, cx, cy;
+  if (S.mode === 'j') { zx = pt.x; zy = pt.y * flip; cx = S.jc.x; cy = S.jc.y * flip; }
+  else { zx = 0; zy = 0; cx = pt.x; cy = pt.y * flip; }
+  const step = () => {
+    if (fam.type === 1) { zx = Math.abs(zx); zy = Math.abs(zy); } else if (fam.type === 2) zy = -zy;
+    if (p2) { const t = zx * zx - zy * zy + cx; zy = 2 * zx * zy + cy; zx = t; }
+    else {
+      const r2 = zx * zx + zy * zy;
+      if (r2 > 0) { const rp = Math.pow(r2, P / 2), th = Math.atan2(zy, zx) * P; zx = rp * Math.cos(th) + cx; zy = rp * Math.sin(th) + cy; }
+      else { zx = cx; zy = cy; }
+    }
+  };
+  const pts = [zx, zy];
+  let escapedAt = 0;
+  for (let n = 1; n <= 4000; n++) {
+    step();
+    const m = zx * zx + zy * zy;
+    if (pts.length < 1200 && m < 1e6) pts.push(zx, zy);
+    if (!escapedAt && m > 4) escapedAt = n;
+    if (escapedAt && (m > 1e6 || n > escapedAt + 4)) break;
+  }
+  let period = 0;
+  if (!escapedAt) {
+    const rx = zx, ry = zy, tol = 1e-9 * (1 + Math.hypot(rx, ry));
+    for (let k = 1; k <= 256; k++) { step(); if (Math.abs(zx - rx) < tol && Math.abs(zy - ry) < tol) { period = k; break; } }
+  }
+  return { pts, escapedAt, period, flip };
+}
+
+function drawOrbit() {
+  octx.clearRect(0, 0, cssW, cssH);
+  const tag = $('#orbitTag');
+  if (!S.orbit || !S.orbitPt) { tag.hidden = true; return; }
+  const o = computeOrbit(S.orbitPt);
+  const toS = (i) => complexToScreen(o.pts[i], o.pts[i + 1] * o.flip);
+  // escape circle |z| = 2
+  const [ox, oy] = complexToScreen(0, 0), rad = 2 / S.view.s;
+  if (rad < 6 * Math.max(cssW, cssH)) {
+    octx.save();
+    octx.setLineDash([5, 5]);
+    octx.lineWidth = 3; octx.strokeStyle = 'rgba(10,35,66,0.35)';
+    octx.beginPath(); octx.arc(ox, oy, rad, 0, Math.PI * 2); octx.stroke();
+    octx.lineWidth = 1.25; octx.strokeStyle = 'rgba(255,255,255,0.85)';
+    octx.beginPath(); octx.arc(ox, oy, rad, 0, Math.PI * 2); octx.stroke();
+    octx.restore();
+    if (rad > 40) {
+      octx.font = 'italic 13px "IBM Plex Serif", Georgia, serif';
+      octx.fillStyle = 'rgba(255,255,255,0.92)';
+      octx.fillText('|z| = 2', ox + rad * 0.72 + 6, oy - rad * 0.72 - 6);
+    }
+  }
+  const n = o.pts.length / 2;
+  octx.lineJoin = 'round';
+  for (const [w, col] of [[3.5, 'rgba(255,255,255,0.85)'], [1.6, '#B4206C']]) {
+    octx.beginPath();
+    for (let i = 0; i < n; i++) { const [x, y] = toS(i * 2); if (i) octx.lineTo(x, y); else octx.moveTo(x, y); }
+    octx.lineWidth = w; octx.strokeStyle = col; octx.stroke();
+  }
+  for (let i = Math.min(n, 60) - 1; i >= 0; i--) {
+    const [x, y] = toS(i * 2), r = i === 0 ? 4 : Math.max(1.6, 3.4 - i * 0.04);
+    octx.beginPath(); octx.arc(x, y, r, 0, Math.PI * 2);
+    octx.fillStyle = '#B4206C'; octx.fill();
+    octx.lineWidth = 1.2; octx.strokeStyle = '#fff'; octx.stroke();
+  }
+  const [px, py] = complexToScreen(S.orbitPt.x, S.orbitPt.y);
+  octx.beginPath(); octx.arc(px, py, 9, 0, Math.PI * 2);
+  octx.lineWidth = 3.5; octx.strokeStyle = 'rgba(255,255,255,0.9)'; octx.stroke();
+  octx.lineWidth = 1.8; octx.strokeStyle = '#B4206C'; octx.stroke();
+
+  const who = S.mode === 'j' ? 'this starting point is outside the Julia set' : 'so c is outside the set';
+  const whoIn = S.mode === 'j' ? 'this starting point is inside the Julia set' : 'so c is inside the set';
+  let head, tail;
+  if (o.escapedAt) { head = `Escapes after ${o.escapedAt.toLocaleString('en-US')} step${o.escapedAt > 1 ? 's' : ''}`; tail = who; }
+  else if (o.period === 1) { head = 'Settles on a single point'; tail = whoIn; }
+  else if (o.period) { head = `Settles into a ${o.period}-step cycle`; tail = whoIn; }
+  else { head = 'Still bounded after 4,000 steps'; tail = S.mode === 'j' ? 'probably inside the Julia set' : 'so c is probably inside the set'; }
+  tag.innerHTML = `<strong>${head}</strong><span>${tail}</span>`;
+  tag.hidden = false;
+  const tw = tag.offsetWidth, th = tag.offsetHeight;
+  let tx = px + 16, ty = py + 16;
+  if (tx + tw > cssW - 8) tx = px - 16 - tw;
+  if (ty + th > cssH - 8) ty = py - 16 - th;
+  tag.style.left = `${clamp(tx, 8, cssW - tw - 8)}px`;
+  tag.style.top = `${clamp(ty, 8, cssH - th - 8)}px`;
+}
+
+/* ---------------------------------------------------------------- flights */
+let flight = null;
+function cancelFlight() {
+  flight = null;
+  if (S.dive) endDive();
+}
+function flyTo(target, opt = {}) {
+  cancelFlightSilently();
+  momentum = null;
+  const from = { ...S.view };
+  const to = clampView({ ...target }, true);
+  if (reduceMotion.matches && !opt.anchor) { S.view = to; moved(); opt.done && opt.done(); return; }
+  const legs = [];
+  if (opt.anchor) {
+    legs.push({ kind: 'anchor', from, to, a: opt.anchor });
+  } else {
+    // if the target isn't visible from the wider of the two views, back out until it is
+    const dx = Math.abs(to.x - from.x), dy = Math.abs(to.y - from.y);
+    const big = Math.max(from.s, to.s);
+    const need = Math.max(dx / (0.42 * cssW), dy / (0.42 * cssH));
+    if (need > big) {
+      const mid = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2, s: need };
+      legs.push({ kind: 'out', from, to: mid }, { kind: 'in', from: mid, to });
+    } else legs.push({ kind: to.s < from.s ? 'in' : 'out', from, to });
+  }
+  for (const L of legs) {
+    const dec = Math.abs(Math.log10(L.to.s / L.from.s));
+    const panPx = Math.hypot(L.to.x - L.from.x, L.to.y - L.from.y) / Math.max(L.from.s, L.to.s);
+    L.dur = opt.duration || (opt.perDecade ? 900 + dec * opt.perDecade : clamp(420 + dec * 380 + panPx * 0.6, 450, 5200));
+    L.dec = dec;
+  }
+  flight = { legs, i: 0, t0: performance.now(), done: opt.done, steady: !!opt.perDecade };
+}
+// constant zoom speed with short acceleration ramps (a = ramp fraction at each end)
+function steadyEase(u, a) {
+  const v = 1 / (1 - a);
+  if (u < a) return 0.5 * v * u * u / a;
+  if (u > 1 - a) return 1 - 0.5 * v * (1 - u) * (1 - u) / a;
+  return v * (u - a / 2);
+}
+function cancelFlightSilently() { flight = null; }
+function stepFlight(now) {
+  const L = flight.legs[flight.i];
+  let u = (now - flight.t0) / L.dur;
+  if (u >= 1) {
+    S.view = { ...L.to }; moved();
+    flight.i++; flight.t0 = now;
+    if (flight.i >= flight.legs.length) { const d = flight.done; flight = null; d && d(); }
+    return;
+  }
+  const e = flight.steady ? steadyEase(u, Math.min(0.2, 1400 / L.dur)) : easeInOut(u);
+  const ls0 = Math.log(L.from.s), ls1 = Math.log(L.to.s);
+  if (L.kind === 'anchor') {
+    const s = Math.exp(lerp(ls0, ls1, e));
+    S.view = { x: L.a.x - (L.a.px - cssW / 2) * s, y: L.a.y + (L.a.py - cssH / 2) * s, s };
+  } else {
+    // zooming in: pan to the target early (in screen terms), then dive straight down
+    const zoomIn = L.kind === 'in';
+    const A = zoomIn ? L.from : L.to, B = zoomIn ? L.to : L.from;
+    const v = zoomIn ? e : 1 - e;
+    const s = Math.exp(lerp(Math.log(A.s), Math.log(B.s), v));
+    const frac = L.dec > 0.6 ? clamp(0.6 / L.dec, 0.12, 1) : 1;
+    const w = 1 - smoothstep(0, frac, v);
+    const ox = (A.x - B.x) / A.s, oy = (A.y - B.y) / A.s;
+    S.view = { x: B.x + ox * w * s, y: B.y + oy * w * s, s };
+  }
+  moved();
+}
+function zoomBy(factor, px = cssW / 2, py = cssH / 2, animate = true) {
+  const a = screenToComplex(px, py);
+  const to = clampView({ x: a.x, y: a.y, s: S.view.s * factor });
+  to.x = a.x - (px - cssW / 2) * to.s; to.y = a.y + (py - cssH / 2) * to.s;
+  if (!animate) { S.view = to; moved(); return; }
+  flyTo(to, { anchor: { x: a.x, y: a.y, px, py }, duration: 320 });
+}
+
+/* ---------------------------------------------------------------- the dive */
+const DIVE_TARGET = { x: -0.10109630374916179, y: 0.95628611194066349, r: 1e-12 };
+const CAPTIONS = [
+  [0, 'This is the Mandelbrot set. Its whole edge comes from repeating z ↦ z² + c.'],
+  [1.1, 'We’re following a thread off the top of the set.'],
+  [2.6, 'The thread branches, and every branch branches again.'],
+  ['deep', 'Past about ×10,000, graphics-card math runs out of digits. Your CPU takes over with 64-bit math.'],
+  [7.5, 'The spokes keep multiplying as we close in on something.'],
+  [10.5, 'A hundred billion times deeper than where we started…'],
+];
+const FINAL = 'A miniature copy of the whole set, about a trillion times smaller. It was here all along.';
+function startDive() {
+  closeDrawer();
+  S.morph = false;
+  if (S.mode === 'j') exitJulia(true);
+  if (S.family !== 'mandelbrot' || Math.abs(S.power - 2) > 1e-4) { S.family = 'mandelbrot'; S.power = 2; paramsChanged(); }
+  const h = homeOf();
+  S.view = { x: h.x, y: h.y, s: sFromR(h.r) }; moved();
+  S.dive = { deepAt: null, text: null, finished: false };
+  $('#caption').hidden = false;
+  $('#stopDive').textContent = 'Stop';
+  const target = { x: DIVE_TARGET.x, y: DIVE_TARGET.y, s: sFromR(DIVE_TARGET.r) };
+  setTimeout(() => {
+    if (!S.dive) return;
+    flyTo(target, { perDecade: reduceMotion.matches ? 0 : 1250, done: () => { if (S.dive) { S.dive.finished = true; $('#stopDive').textContent = 'Close'; } } });
+  }, 900);
+}
+function updateCaption() {
+  const d = S.dive;
+  let text;
+  if (d.finished) text = FINAL;
+  else {
+    const lm = Math.log10(Math.max(1, magnification()));
+    const marks = CAPTIONS.map(([t, s]) => [t === 'deep' ? (d.deepAt == null ? Infinity : d.deepAt) : t, s]).sort((a, b) => a[0] - b[0]);
+    for (const [t, s] of marks) if (lm >= t) text = s;
+  }
+  if (text && text !== d.text) {
+    d.text = text;
+    const p = $('#captionText');
+    if (reduceMotion.matches) p.textContent = text;
+    else { p.classList.add('swap'); setTimeout(() => { p.textContent = text; p.classList.remove('swap'); }, 220); }
+  }
+}
+function endDive() {
+  S.dive = null;
+  $('#caption').hidden = true;
+}
+
+/* ---------------------------------------------------------------- places */
+const PLACES = [
+  { group: 'In the Mandelbrot set', items: [
+    { name: 'The whole set', note: 'Where every dive begins.', home: true },
+    { name: 'Seahorse Valley', note: 'Curling tails in the crease between the two largest bulbs.', x: -0.7453, y: 0.1127, r: 0.004 },
+    { name: 'Elephant Valley', note: 'A parade of trunks on the eastern shore.', x: 0.285, y: 0.011, r: 0.0083 },
+    { name: 'A mini Mandelbrot', note: 'A small copy of the set sitting on the western needle.', x: -1.7548776662466927, y: 0, r: 0.0167 },
+    { name: 'Double spirals', note: 'Deep enough that the graphics card hands off to 64-bit CPU math.', x: -0.761574, y: -0.0847596, r: 6.7e-5 },
+    { name: 'The seahorse’s eye', note: 'A copy of the set at the heart of a seahorse spiral.', x: -0.74364230165788603, y: 0.13182651981259469, r: 1.2e-5 },
+    { name: 'Spiral galaxy', note: 'Arms wound around a tiny copy, far down the western needle.', x: -1.7685736563152709, y: 0.0009642968513582, r: 6.7e-10 },
+    { name: 'The hidden copy', note: 'A complete copy of the set, a trillion times smaller. The dive ends here.', x: DIVE_TARGET.x, y: DIVE_TARGET.y, r: DIVE_TARGET.r },
+  ] },
+  { group: 'Relatives', items: [
+    { name: 'The Burning Ship', note: 'Take absolute values each step and a ship on fire appears.', fam: 'ship', x: -1.755, y: 0.03, r: 0.04 },
+    { name: 'The Tricorn', note: 'Mirror z across the real axis each step.', fam: 'tricorn', home: true },
+    { name: 'Multibrot, z³ + c', note: 'Raise the power and the set grows more lobes.', power: 3, home: true },
+    { name: 'A Julia set', note: 'Fix c and vary the starting point instead.', julia: { x: -0.7269, y: 0.1889 }, home: true },
+  ] },
+];
+function buildPlaces() {
+  const host = $('#placeList');
+  for (const g of PLACES) {
+    const h = document.createElement('h2'); h.textContent = g.group; host.append(h);
+    const ul = document.createElement('ul'); ul.className = 'places';
+    for (const p of g.items) {
+      const fam = p.fam || 'mandelbrot', power = p.power || 2;
+      const mag = p.home ? 1 : homeOf(fam, power, 'm').r / p.r;
+      const li = document.createElement('li');
+      const b = document.createElement('button');
+      b.className = 'place';
+      b.innerHTML = `<span class="name"></span><span class="depth"></span><span class="note"></span>`;
+      b.querySelector('.name').textContent = p.name;
+      b.querySelector('.depth').textContent = '×' + fmtMag(mag);
+      b.querySelector('.note').textContent = p.note;
+      b.addEventListener('click', () => goToPlace(p));
+      li.append(b); ul.append(li);
+    }
+    host.append(ul);
+  }
+}
+function goToPlace(p) {
+  if (S.dive) endDive();
+  S.morph = false;
+  if (window.innerWidth <= 720) closeDrawer();
+  const fam = p.fam || 'mandelbrot', power = p.power || 2;
+  const wantJulia = !!p.julia;
+  const switching = fam !== S.family || Math.abs(power - S.power) > 1e-4 || wantJulia !== (S.mode === 'j') || (wantJulia && (p.julia.x !== S.jc.x || p.julia.y !== S.jc.y));
+  if (switching) {
+    if (S.mode === 'j' && !wantJulia) S.mode = 'm';
+    S.family = fam; S.power = power;
+    if (wantJulia) { S.saved = { x: p.julia.x, y: p.julia.y, s: sFromR(0.6) }; S.jc = { ...p.julia }; S.mode = 'j'; }
+    const h = homeOf();
+    S.view = { x: h.x, y: h.y, s: sFromR(h.r) };
+    paramsChanged(); moved(); updateJuliaUI();
+  }
+  if (p.home) { const h = homeOf(); flyTo({ x: h.x, y: h.y, s: sFromR(h.r) }); }
+  else flyTo({ x: p.x, y: p.y, s: sFromR(p.r) });
+}
+
+/* ---------------------------------------------------------------- Julia mode */
+function enterJulia(c) {
+  if (S.dive) endDive();
+  S.saved = { ...S.view };
+  S.jc = { x: c.x, y: c.y };
+  S.mode = 'j';
+  const h = homeOf();
+  S.view = { x: h.x, y: h.y, s: sFromR(h.r) };
+  S.orbitPt = null;
+  paramsChanged(); moved(); updateJuliaUI();
+}
+function exitJulia(quiet) {
+  S.mode = 'm';
+  if (S.saved) S.view = { ...S.saved };
+  else { const h = homeOf(); S.view = { x: h.x, y: h.y, s: sFromR(h.r) }; }
+  S.orbitPt = null;
+  paramsChanged(); moved(); updateJuliaUI();
+}
+function updateJuliaUI() {
+  const j = S.mode === 'j';
+  $('#backBtn').hidden = !j;
+  const note = $('#juliaNote');
+  note.hidden = !j;
+  if (j) note.textContent = `You’re looking at the Julia set for c = ${fmtComplex(S.jc.x, S.jc.y, 4)}.`;
+}
+
+/* ---------------------------------------------------------------- controls */
+function ruleHTML() {
+  const p = Math.abs(S.power - 2) < 1e-4 ? '²' : `<sup>${S.power.toFixed(2)}</sup>`;
+  const lhs = S.mode === 'j' ? 'z ↦ ' : 'z ↦ ';
+  if (S.family === 'ship') return `${lhs}(|Re z| + i|Im z|)${p} + c`;
+  if (S.family === 'tricorn') return `${lhs}z̄${p} + c`;
+  return `${lhs}z${p} + c`;
+}
+const iterToSlider = (it) => Math.log(it / 50) / Math.log(160);
+const sliderToIter = (v) => Math.round(50 * Math.pow(160, v) / 10) * 10;
+function syncControls() {
+  $$('[data-fam]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.fam === S.family)));
+  $('#ruleText').innerHTML = ruleHTML();
+  $('#power').value = S.power;
+  $('#powerOut').textContent = S.power.toFixed(2);
+  $('#morphBtn').setAttribute('aria-pressed', String(S.morph));
+  const it = iterations();
+  $('#iter').value = iterToSlider(it);
+  $('#iterOut').textContent = it.toLocaleString('en-US');
+  $('#autoIter').checked = S.autoIter;
+  $$('.swatch').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.pal === S.palette)));
+  $('#density').value = S.density;
+  $('#densityOut').textContent = S.density.toFixed(2);
+  $('#contours').checked = S.contours;
+  $('#cycleBtn').setAttribute('aria-pressed', String(S.cycling));
+  $('#orbitBtn').setAttribute('aria-pressed', String(S.orbit));
+  $('#twinBtn').setAttribute('aria-pressed', String(S.twin));
+  document.body.classList.toggle('orbiting', S.orbit);
+}
+function setPower(p, live) {
+  S.power = live ? p : Math.round(p * 100) / 100;
+  dirty.geom = dirty.insets = dirty.twin = dirty.hud = dirty.view = true;
+  $('#power').value = S.power;
+  $('#powerOut').textContent = S.power.toFixed(2);
+  $('#ruleText').innerHTML = ruleHTML();
+  if (!live) scheduleHash();
+}
+function setPalette(name) {
+  const p = PALETTES[name];
+  S.palette = name; S.density = p.density; S.contours = p.contours;
+  const rgba = buildPalette(p.stops);
+  for (const g of [R, overviewGL, twinGL]) g.setPalette(rgba);
+  document.body.style.background = p.backdrop;
+  dirty.shade = dirty.insets = dirty.twin = true;
+  syncControls(); scheduleHash();
+}
+function buildSwatches() {
+  const host = $('#swatches');
+  for (const [key, p] of Object.entries(PALETTES)) {
+    const b = document.createElement('button');
+    b.className = 'swatch'; b.dataset.pal = key; b.setAttribute('aria-pressed', 'false');
+    const grad = p.stops.map(([t, c]) => `${c} ${Math.round(t * 100)}%`).join(', ');
+    b.innerHTML = `<span style="background:linear-gradient(90deg, ${grad})"></span><span>${p.name}</span>`;
+    b.addEventListener('click', () => setPalette(key));
+    host.append(b);
+  }
+}
+function toggleOrbit(on = !S.orbit) {
+  S.orbit = on;
+  if (on && !S.orbitPt) {
+    S.orbitPt = S.mode === 'j' ? screenToComplex(cssW * 0.5, cssH * 0.42) : { x: -0.12, y: 0.75 };
+  }
+  dirty.view = true; syncControls();
+  if (on) toast(matchMedia('(pointer: coarse)').matches ? 'Touch and drag to trace orbits' : 'Move the pointer to trace orbits');
+}
+function toggleTwin(on = !S.twin) {
+  S.twin = on; dirty.twin = true; syncControls();
+}
+
+/* ---------------------------------------------------------------- drawer */
+let currentTab = 'places';
+function openDrawer(tab = currentTab) {
+  currentTab = tab;
+  document.body.classList.add('drawer-open');
+  $('#menuBtn').setAttribute('aria-expanded', 'true');
+  $$('[role="tab"]').forEach((t) => t.setAttribute('aria-selected', String(t.dataset.tab === tab)));
+  $$('.panel').forEach((p) => { p.hidden = p.id !== `tab-${tab}`; });
+  $$('[data-open]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.open === tab)));
+}
+function closeDrawer() {
+  document.body.classList.remove('drawer-open');
+  $('#menuBtn').setAttribute('aria-expanded', 'false');
+  $$('[data-open]').forEach((b) => b.setAttribute('aria-pressed', 'false'));
+}
+const drawerOpen = () => document.body.classList.contains('drawer-open');
+
+/* ---------------------------------------------------------------- toast, share, save */
+let toastTimer = 0;
+function toast(msg) {
+  const t = $('#toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
+}
+async function copyLink() {
+  writeHash();
+  const url = location.href;
+  if (navigator.share && matchMedia('(pointer: coarse)').matches) {
+    try { await navigator.share({ title: 'Mandelbrot Atlas', url }); return; }
+    catch (err) { if (err.name === 'AbortError') return; }
+  }
+  try { await navigator.clipboard.writeText(url); toast('Link copied'); }
+  catch { window.prompt('Copy this link:', url); }
+}
+function saveImage() {
+  dirty.geom = true;
+  draw(false);
+  const url = view.toDataURL('image/png');
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `mandelbrot-atlas-x${fmtMag(magnification()).replace(/[^0-9a-z.]+/gi, '-')}.png`;
+  document.body.append(a); a.click(); a.remove();
+  toast(deepMode && Deep.progress < 1 ? 'Image saved while still rendering' : 'Image saved');
+}
+
+/* ---------------------------------------------------------------- URL state */
+let hashTimer = 0;
+function scheduleHash() { clearTimeout(hashTimer); hashTimer = setTimeout(writeHash, 450); }
+function writeHash() {
+  const p = new URLSearchParams();
+  const d = clamp(Math.ceil(-Math.log10(S.view.s)) + 3, 4, 17);
+  if (S.family !== 'mandelbrot') p.set('f', S.family);
+  if (Math.abs(S.power - 2) > 1e-4) p.set('p', S.power.toFixed(2));
+  p.set('x', S.view.x.toFixed(d));
+  p.set('y', S.view.y.toFixed(d));
+  p.set('r', radius().toPrecision(4));
+  if (S.mode === 'j') { p.set('jx', S.jc.x.toFixed(10)); p.set('jy', S.jc.y.toFixed(10)); }
+  if (S.palette !== 'chart') p.set('pal', S.palette);
+  if (!S.autoIter) p.set('it', S.manualIter);
+  try { history.replaceState(null, '', '#' + p.toString()); } catch { /* sandboxed frames */ }
+}
+function readHash() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  const num = (k) => { const v = parseFloat(p.get(k)); return Number.isFinite(v) ? v : null; };
+  if (p.get('f') && FAM[p.get('f')]) S.family = p.get('f');
+  const pw = num('p'); if (pw) S.power = clamp(pw, 2, 8);
+  const jx = num('jx'), jy = num('jy');
+  if (jx !== null && jy !== null) { S.mode = 'j'; S.jc = { x: jx, y: jy }; }
+  if (p.get('pal') && PALETTES[p.get('pal')]) S.palette = p.get('pal');
+  const it = num('it'); if (it) { S.autoIter = false; S.manualIter = clamp(Math.round(it), 20, 20000); }
+  const x = num('x'), y = num('y'), r = num('r');
+  const h = homeOf();
+  S.view = (x !== null && y !== null && r)
+    ? clampView({ x, y, s: sFromR(r) })
+    : { x: h.x, y: h.y, s: sFromR(h.r) };
+}
+
+/* ---------------------------------------------------------------- input */
+const pointers = new Map();
+let drag = null, pinch = null, momentum = null, lastTap = null;
+function engage() { document.body.classList.add('engaged'); }
+
+view.addEventListener('pointerdown', (e) => {
+  engage();
+  view.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  cancelFlight(); momentum = null;
+  if (pointers.size === 1) {
+    drag = { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, t: performance.now(), vx: 0, vy: 0, moved: false, orbit: S.orbit && e.pointerType !== 'mouse' };
+    if (drag.orbit) { S.orbitPt = screenToComplex(e.clientX, e.clientY); dirty.view = true; }
+    else view.classList.add('dragging');
+  } else if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, s: S.view.s, anchor: screenToComplex(mx, my) };
+    drag = null;
+  }
+});
+view.addEventListener('pointermove', (e) => {
+  if (e.pointerType === 'mouse') {
+    S.hover = screenToComplex(e.clientX, e.clientY);
+    if (S.twin && S.mode === 'm') dirty.twin = true;
+    if (S.orbit && !pointers.size) { S.orbitPt = S.hover; dirty.view = true; }
+  }
+  if (!pointers.has(e.pointerId)) return;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pinch && pointers.size >= 2) {
+    const [a, b] = [...pointers.values()];
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    const s = pinch.s * pinch.d / (Math.hypot(a.x - b.x, a.y - b.y) || 1);
+    S.view = clampView({ x: pinch.anchor.x, y: pinch.anchor.y, s });
+    S.view.x = pinch.anchor.x - (mx - cssW / 2) * S.view.s;
+    S.view.y = pinch.anchor.y + (my - cssH / 2) * S.view.s;
+    moved();
+  } else if (drag) {
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) > 4) drag.moved = true;
+    const now = performance.now(), dt = Math.max(1, now - drag.t);
+    drag.x = e.clientX; drag.y = e.clientY; drag.t = now;
+    if (drag.orbit) { S.orbitPt = screenToComplex(e.clientX, e.clientY); dirty.view = true; return; }
+    S.view.x -= dx * S.view.s; S.view.y += dy * S.view.s;
+    drag.vx = lerp(drag.vx, dx / dt, 0.4); drag.vy = lerp(drag.vy, dy / dt, 0.4);
+    moved();
+  }
+});
+function endPointer(e) {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.delete(e.pointerId);
+  view.classList.remove('dragging');
+  if (pinch) {
+    if (pointers.size < 2) pinch = null;
+    if (pointers.size === 1) { const [p] = [...pointers.values()]; drag = { x: p.x, y: p.y, sx: p.x, sy: p.y, t: performance.now(), vx: 0, vy: 0, moved: true }; }
+    return;
+  }
+  if (!drag) return;
+  const d = drag; drag = null;
+  if (!d.moved && e.type === 'pointerup') {
+    const now = performance.now();
+    // a tap pins the Julia twin's c (touch screens have no hover)
+    if (S.twin && S.mode === 'm' && !d.orbit) { S.hover = screenToComplex(e.clientX, e.clientY); dirty.twin = true; }
+    if (lastTap && now - lastTap.t < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 30) {
+      lastTap = null;
+      zoomBy(e.shiftKey ? 2.5 : 1 / 2.5, e.clientX, e.clientY);
+    } else lastTap = { t: now, x: e.clientX, y: e.clientY };
+    return;
+  }
+  if (!d.orbit && performance.now() - d.t < 60 && Math.hypot(d.vx, d.vy) > 0.25 && !reduceMotion.matches) momentum = { vx: d.vx, vy: d.vy };
+}
+view.addEventListener('pointerup', endPointer);
+view.addEventListener('pointercancel', endPointer);
+function stepMomentum(dt) {
+  S.view.x -= momentum.vx * dt * S.view.s;
+  S.view.y += momentum.vy * dt * S.view.s;
+  const k = Math.exp(-dt / 260);
+  momentum.vx *= k; momentum.vy *= k;
+  if (Math.hypot(momentum.vx, momentum.vy) < 0.01) momentum = null;
+  moved();
+}
+view.addEventListener('wheel', (e) => {
+  e.preventDefault(); engage();
+  cancelFlight(); momentum = null;
+  let dy = e.deltaY;
+  if (e.deltaMode === 1) dy *= 16; else if (e.deltaMode === 2) dy *= cssH;
+  const f = Math.exp(clamp(dy * (e.ctrlKey ? 0.01 : 0.0018), -0.8, 0.8));
+  zoomBy(f, e.clientX, e.clientY, false);
+}, { passive: false });
+
+window.addEventListener('keydown', (e) => {
+  const tag = e.target.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key;
+  const pan = (fx, fy) => { cancelFlight(); flyTo({ x: S.view.x + fx * cssW * S.view.s * 0.2, y: S.view.y + fy * cssH * S.view.s * 0.2, s: S.view.s }, { duration: 260 }); };
+  if (k === 'ArrowLeft') pan(-1, 0);
+  else if (k === 'ArrowRight') pan(1, 0);
+  else if (k === 'ArrowUp') pan(0, 1);
+  else if (k === 'ArrowDown') pan(0, -1);
+  else if (k === '+' || k === '=') { cancelFlight(); zoomBy(0.5); }
+  else if (k === '-' || k === '_') { cancelFlight(); zoomBy(2); }
+  else if (k === 'o' || k === 'O') toggleOrbit();
+  else if (k === 'j' || k === 'J') toggleTwin();
+  else if (k === 'c' || k === 'C') { S.cycling = !S.cycling; syncControls(); }
+  else if (k === 'r' || k === 'R') resetView();
+  else if (k === 'h' || k === 'H') document.body.classList.toggle('clean');
+  else if (k === 'Escape') {
+    if (drawerOpen()) closeDrawer();
+    else if (S.dive) { cancelFlightSilently(); endDive(); }
+    else if (S.orbit) toggleOrbit(false);
+    else if (document.body.classList.contains('clean')) document.body.classList.remove('clean');
+  } else return;
+  if (k.startsWith('Arrow')) e.preventDefault();
+});
+
+function resetView() {
+  if (S.dive) { cancelFlightSilently(); endDive(); }
+  S.morph = false; syncControls();
+  const h = homeOf();
+  flyTo({ x: h.x, y: h.y, s: sFromR(h.r) });
+}
+
+// overview: click to jump; twin inset: pick c / explore
+ovMarks.addEventListener('click', (e) => {
+  if (!ovView) return;
+  const r = ovMarks.getBoundingClientRect();
+  const x = ovView.x + ((e.clientX - r.left) * dpr - ovMarks.width / 2) * ovView.s;
+  const y = ovView.y - ((e.clientY - r.top) * dpr - ovMarks.height / 2) * ovView.s;
+  if (S.dive) { cancelFlightSilently(); endDive(); }
+  flyTo({ x, y, s: Math.min(S.view.s, sFromR(homeOf().r * 0.35)) });
+});
+let twinDrag = false;
+function twinPick(e) {
+  if (S.mode !== 'j' || !twView) return;
+  const r = twMarks.getBoundingClientRect();
+  S.jc = {
+    x: twView.x + ((e.clientX - r.left) * dpr - twMarks.width / 2) * twView.s,
+    y: twView.y - ((e.clientY - r.top) * dpr - twMarks.height / 2) * twView.s,
+  };
+  dirty.geom = dirty.view = dirty.insets = true;
+  drawTwinMarks(); updateJuliaUI(); scheduleHash();
+}
+twMarks.addEventListener('pointerdown', (e) => {
+  if (S.mode === 'j') { twinDrag = true; twMarks.setPointerCapture(e.pointerId); twinPick(e); }
+  else enterJulia(twinC());
+});
+twMarks.addEventListener('pointermove', (e) => { if (twinDrag) twinPick(e); });
+twMarks.addEventListener('pointerup', () => { twinDrag = false; });
+twMarks.addEventListener('pointercancel', () => { twinDrag = false; });
+
+/* ---------------------------------------------------------------- wire up UI */
+$('#diveBtn').addEventListener('click', startDive);
+$('#stopDive').addEventListener('click', () => { cancelFlightSilently(); endDive(); });
+$('#backBtn').addEventListener('click', () => exitJulia());
+$('#twinGo').addEventListener('click', () => { if (S.mode === 'j') exitJulia(); else enterJulia(twinC()); });
+$('#orbitBtn').addEventListener('click', () => toggleOrbit());
+$('#twinBtn').addEventListener('click', () => toggleTwin());
+$('#shareBtn').addEventListener('click', copyLink);
+$('#saveBtn').addEventListener('click', saveImage);
+$('#resetBtn').addEventListener('click', resetView);
+$('#menuBtn').addEventListener('click', () => (drawerOpen() ? closeDrawer() : openDrawer()));
+$('#closeDrawer').addEventListener('click', closeDrawer);
+$$('[data-open]').forEach((b) => b.addEventListener('click', () => (drawerOpen() && currentTab === b.dataset.open ? closeDrawer() : openDrawer(b.dataset.open))));
+$$('[role="tab"]').forEach((t) => t.addEventListener('click', () => openDrawer(t.dataset.tab)));
+$$('[data-fam]').forEach((b) => b.addEventListener('click', () => {
+  if (S.family === b.dataset.fam) return;
+  if (S.dive) { cancelFlightSilently(); endDive(); }
+  S.family = b.dataset.fam;
+  const h = homeOf();
+  S.view = { x: h.x, y: h.y, s: sFromR(h.r) };
+  S.orbitPt = null;
+  paramsChanged(); moved();
+}));
+$('#power').addEventListener('input', (e) => {
+  S.morph = false; $('#morphBtn').setAttribute('aria-pressed', 'false');
+  setPower(parseFloat(e.target.value));
+});
+$('#morphBtn').addEventListener('click', () => {
+  S.morph = !S.morph;
+  if (S.morph) morphPhase = Math.acos(clamp((3.5 - S.power) / 1.5, -1, 1));
+  else setPower(S.power);
+  syncControls();
+});
+$('#iter').addEventListener('input', (e) => {
+  S.autoIter = false; S.manualIter = sliderToIter(parseFloat(e.target.value));
+  dirty.geom = dirty.hud = true; syncControls(); scheduleHash();
+});
+$('#autoIter').addEventListener('change', (e) => {
+  S.autoIter = e.target.checked;
+  if (!S.autoIter) S.manualIter = iterations();
+  dirty.geom = dirty.hud = true; syncControls(); scheduleHash();
+});
+$('#density').addEventListener('input', (e) => { S.density = parseFloat(e.target.value); $('#densityOut').textContent = S.density.toFixed(2); dirty.shade = dirty.insets = dirty.twin = true; });
+$('#contours').addEventListener('change', (e) => { S.contours = e.target.checked; dirty.shade = dirty.insets = dirty.twin = true; });
+$('#cycleBtn').addEventListener('click', () => { S.cycling = !S.cycling; syncControls(); });
+$$('[data-action]').forEach((b) => b.addEventListener('click', () => {
+  if (window.innerWidth <= 720) closeDrawer();
+  if (b.dataset.action === 'orbit') toggleOrbit(true); else toggleTwin(true);
+}));
+
+window.addEventListener('resize', resize);
+window.addEventListener('hashchange', () => {
+  readHash(); setPalette(S.palette); paramsChanged(); moved(); updateJuliaUI();
+});
+view.addEventListener('webglcontextlost', (e) => { e.preventDefault(); toast('The graphics context was lost. Reload the page to continue.'); });
+
+/* ---------------------------------------------------------------- start */
+buildPlaces();
+buildSwatches();
+resize();
+readHash();
+setPalette(S.palette);
+updateJuliaUI();
+syncControls();
+dirty.geom = dirty.view = dirty.insets = dirty.twin = dirty.hud = true;
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
