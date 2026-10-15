@@ -152,7 +152,15 @@
   .cs-note { display: inline-flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 500; color: var(--cs-accent); }
   .cs-note::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex: none; }
   .cs-shot { margin: clamp(32px, 4vw, 48px) 0 0; border-radius: 12px 12px 0 0; overflow: hidden; background: #fff; box-shadow: 0 0 0 1px var(--cs-line), 0 24px 48px -24px rgba(15, 60, 58, 0.45); }
-  .cs-bar { display: flex; align-items: center; height: 34px; padding: 0 16px; background: #F7F9FA; border-bottom: 1px solid #DFE3E8; font-size: 12.5px; color: #66727E; }
+  .cs-bar { position: relative; display: flex; align-items: center; justify-content: center; height: 44px; padding: 0 16px; background: #F1F3F5; border-bottom: 1px solid #DFE3E8; }
+  .cs-dots { position: absolute; left: 16px; top: 50%; display: flex; gap: 7px; transform: translateY(-50%); }
+  .cs-dots i { width: 11px; height: 11px; border-radius: 50%; background: #FF5F57; }
+  .cs-dots i:nth-child(2) { background: #FEBC2E; }
+  .cs-dots i:nth-child(3) { background: #28C840; }
+  .cs-url { display: flex; align-items: center; justify-content: center; gap: 7px; width: min(52%, 420px); height: 28px; padding: 0 14px; border-radius: 999px; background: #fff; box-shadow: 0 0 0 1px #DAE0E5; font-size: 13px; color: #7A8490; white-space: nowrap; }
+  .cs-url b { font-weight: 500; color: #202A35; }
+  .cs-url svg { width: 11px; height: 12px; flex: none; fill: #6E7680; }
+  @media (max-width: 520px) { .cs-bar { justify-content: flex-start; padding-left: 70px; } .cs-url { width: auto; max-width: 100%; font-size: 12px; } }
   .cs-shot img { width: 100%; }
   @media (max-width: 520px) { .cs-shot img { aspect-ratio: 1 / 1; object-fit: cover; object-position: left top; } }
   @media (prefers-color-scheme: dark) {
@@ -281,8 +289,8 @@
         </div>
       </div>
       <figure class="cs-shot">
-        <div class="cs-bar" aria-hidden="true">countsift.com/sample</div>
-        <img src="assets/countsift-report.webp" width="1600" height="900" loading="lazy"
+        <div class="cs-bar" aria-hidden="true"><span class="cs-dots"><i></i><i></i><i></i></span><span class="cs-url"><svg viewBox="0 0 11 12"><path d="M2.5 5V3.5a3 3 0 0 1 6 0V5h.5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zm1.5 0h3V3.5a1.5 1.5 0 0 0-3 0z"/></svg><span><b>countsift.com</b>/sample</span></span></div>
+        <img src="assets/countsift-report.webp" width="1184" height="666" loading="lazy"
              alt="CountSift's built-in sample report, showing $795.00 a month in missed revenue and under-billed lines for made-up customers such as Pinecrest Veterinary and Acme Corp.">
       </figure>
     </article>
