@@ -151,6 +151,9 @@
   .cs-button:hover { background: var(--cs-accent-hover); color: #fff; }
   .cs-note { display: inline-flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 500; color: var(--cs-accent); }
   .cs-note::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex: none; }
+  .cs-more { margin: 12px 0 0; font-size: 15px; font-weight: 600; }
+  .cs-more a { color: var(--cs-accent); text-decoration-color: var(--cs-line); }
+  .cs-more a:hover { color: var(--cs-accent-hover); text-decoration-color: currentColor; }
   .cs-shot { margin: clamp(32px, 4vw, 48px) 0 0; border-radius: 12px 12px 0 0; overflow: hidden; background: #fff; box-shadow: 0 0 0 1px var(--cs-line), 0 24px 48px -24px rgba(15, 60, 58, 0.45); }
   .cs-bar { position: relative; display: flex; align-items: center; justify-content: center; height: 44px; padding: 0 16px; background: #F1F3F5; border-bottom: 1px solid #DFE3E8; }
   .cs-dots { position: absolute; left: 16px; top: 50%; display: flex; gap: 7px; transform: translateY(-50%); }
@@ -286,6 +289,7 @@
             <li>Flags under-billing, over-billing and wrong plans, and estimates what each gap is worth from the prices already in the billing export.</li>
           </ul>
           <p class="built"><strong>Built with</strong> JavaScript, HTML and CSS, with no backend. Hosted on Cloudflare Pages.</p>
+          <p class="cs-more"><a href="countsift/">Technical breakdown<span class="sr"> of CountSift</span><span aria-hidden="true"> →</span></a></p>
         </div>
       </div>
       <figure class="cs-shot">

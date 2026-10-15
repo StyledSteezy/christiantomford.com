@@ -10,8 +10,10 @@ Live at https://www.christiantomford.com
 | --- | --- |
 | `index.html` | The home page: intro, projects, about, contact. |
 | `mandelbrot/index.html` | Mandelbrot Atlas, served at `christiantomford.com/mandelbrot/`. A single self-contained file. |
+| `countsift/index.html` | CountSift technical case study, served at `christiantomford.com/countsift/`. Linked from the CountSift section's "Technical breakdown" link. Uses the same colors, fonts and top bar as the home page, copied into its own `<style>` block. |
 | `assets/mandelbrot-atlas.webp` | Project image (a screenshot of the atlas at Seahorse Valley). |
 | `assets/countsift-report.webp` | Project image (CountSift's built-in sample report, which uses made-up customers). |
+| `assets/countsift-mapping-diagram.webp` | The case study's figure: CountSift's "How your files connect" diagram for the built-in sample (See a sample report, then See how these files were mapped). |
 | `assets/og-image.jpg` | Preview image shown when the site is shared on LinkedIn, Slack, etc. |
 | `assets/favicon.svg` | Browser tab icon (the Chicago star). |
 | `resume.pdf` | Web copy of the resume, with the phone number removed. |
@@ -35,6 +37,7 @@ Then visit http://localhost:8000.
 
 - **Project text** lives in `index.html`, inside the two `<article class="project">` blocks.
 - **Adding a project:** copy one of the `<article>` blocks and change its text, image and link.
+- **The CountSift case study** lives in `countsift/index.html`. Its figures and numbers come from CountSift's built-in sample and the made-up exports in CountSift's `test-data/` folder, so update them if CountSift's matching changes. If you change colors or fonts in `index.html`, make the same change at the top of its `<style>` block.
 - **Updating the atlas:** replace `mandelbrot/index.html` with the new version.
 - **Colors and fonts** are CSS variables at the top of the `<style>` block in `index.html`. Dark mode follows the visitor's system setting.
 

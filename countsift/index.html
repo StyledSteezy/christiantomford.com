@@ -1,0 +1,704 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>How CountSift works · Christian Tomford</title>
+<meta name="description" content="A technical case study of CountSift, a browser-only billing reconciliation tool: CSV parsing and column mapping, name normalization, fuzzy matching, quantity comparison and monthly revenue estimates.">
+<meta name="author" content="Christian Tomford">
+<link rel="canonical" href="https://www.christiantomford.com/countsift/">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<meta property="og:type" content="article">
+<meta property="og:title" content="How CountSift works">
+<meta property="og:description" content="How a browser-only tool reads billing, device and license exports, matches names each system spells differently, and prices every gap.">
+<meta property="og:url" content="https://www.christiantomford.com/countsift/">
+<meta property="og:image" content="https://www.christiantomford.com/assets/og-image.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#F6F8FA" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0E1A2F" media="(prefers-color-scheme: dark)">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;700;800&display=swap" rel="stylesheet">
+<style>
+  /* Same tokens, type and top bar as the home page (index.html). */
+  :root {
+    --paper: #F6F8FA;
+    --surface: #FFFFFF;
+    --ink: #13213C;
+    --ink-2: #4A5772;
+    --ink-3: #75819A;
+    --rule: #D7DFE8;
+    --sky: #41B6E6;      /* Chicago flag blue */
+    --sky-soft: #DCEFF8;
+    --star: #D7192F;     /* Chicago flag red */
+    --star-soft: #FBE3E6;
+    --cs-accent: #0F6E68; /* CountSift teal, as in the home page's CountSift section */
+    /* CountSift's status colors, used for the status dots */
+    --st-under: #A6261C; --st-over: #B07200; --st-plan: #6D3FC0; --st-ok: #1E6B3A; --st-grey: #8A95A1;
+    --font: "Schibsted Grotesk", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --wrap: 1180px;
+    --gutter: clamp(20px, 5vw, 48px);
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0E1A2F;
+      --surface: #15233C;
+      --ink: #EAF0F7;
+      --ink-2: #AEBBD0;
+      --ink-3: #8090A8;
+      --rule: #263856;
+      --sky: #5CC4EE;
+      --sky-soft: #173A57;
+      --star: #FF5A6B;
+      --star-soft: #3D1D2C;
+      --cs-accent: #4FC1B6;
+      --st-under: #FF6B5E; --st-over: #F2B33D; --st-plan: #A98BFF; --st-ok: #4CC67A; --st-grey: #8090A8;
+      color-scheme: dark;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font: 400 17px/1.6 var(--font);
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+  img { display: block; max-width: 100%; height: auto; }
+  a { color: inherit; text-decoration-line: underline; text-decoration-color: var(--sky); text-decoration-thickness: 2px; text-underline-offset: 4px; }
+  a:hover { text-decoration-color: var(--star); }
+  :focus-visible { outline: 3px solid var(--star); outline-offset: 3px; border-radius: 2px; }
+  .wrap { max-width: var(--wrap); margin: 0 auto; padding: 0 var(--gutter); }
+  .sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+  .skip { position: absolute; left: -9999px; top: 8px; background: var(--ink); color: var(--paper); padding: 8px 12px; z-index: 30; }
+  .skip:focus { left: 8px; }
+
+  /* Top bar: pinned while scrolling, with a background once the page moves. */
+  .top { position: sticky; top: 0; z-index: 20; transition: background-color .3s, box-shadow .3s; }
+  .top.is-scrolled {
+    background: color-mix(in srgb, var(--paper) 94%, transparent);
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+    box-shadow: 0 1px 0 var(--rule);
+  }
+  .top-inner { display: flex; align-items: center; justify-content: space-between; gap: 16px; height: 72px; }
+  .mark { display: inline-flex; align-items: center; padding: 4px; margin-left: -4px; text-decoration: none; }
+  .mark svg { width: 60px; height: 60px; flex: none; }
+  @media (prefers-reduced-motion: reduce) { .top { transition: none; } }
+  .nav { display: flex; gap: 6px 22px; flex-wrap: wrap; justify-content: flex-end; }
+  .nav a { text-decoration: none; font-weight: 500; font-size: 15.5px; color: var(--ink-2); }
+  .nav a:hover { color: var(--ink); text-decoration: underline; text-decoration-color: var(--star); }
+
+  /* ---------- Intro ---------- */
+  .intro { padding-top: clamp(36px, 6vw, 88px); }
+  .crumb { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 15.5px; font-weight: 500; color: var(--ink-3); }
+  .crumb a { color: var(--ink-2); text-decoration-thickness: 1px; text-decoration-color: var(--rule); }
+  .crumb a:hover { color: var(--ink); text-decoration-color: var(--star); }
+  .crumb .cs-mark { width: 15px; height: 15px; flex: none; }
+  .cs-mark rect { fill: var(--cs-accent); }
+  .cs-mark .two { fill-opacity: .55; }
+  .crumb b { color: var(--ink); font-weight: 700; }
+  .intro h1 {
+    margin: clamp(14px, 2vw, 22px) 0 0; font-weight: 800; letter-spacing: -0.045em; line-height: 0.9;
+    font-size: clamp(50px, 9.6vw, 128px); text-wrap: balance;
+  }
+  .intro-foot { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 28px clamp(32px, 6vw, 88px); align-items: end; margin-top: clamp(26px, 4vw, 44px); }
+  .lede { margin: 0; max-width: 40ch; font-size: clamp(19px, 2vw, 23px); line-height: 1.45; }
+  .meta { margin: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 20px; font-size: 15.5px; }
+  .meta dt { color: var(--ink-3); }
+  .meta dd { margin: 0; color: var(--ink-2); }
+
+  .toc { list-style: none; margin: clamp(36px, 5vw, 56px) 0 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 clamp(20px, 3vw, 40px); counter-reset: toc; }
+  .toc li { border-top: 1px solid var(--rule); }
+  .toc a { display: flex; gap: 14px; padding: 12px 0 13px; text-decoration: none; font-weight: 500; font-size: 16px; color: var(--ink-2); }
+  .toc a::before { counter-increment: toc; content: counter(toc, decimal-leading-zero); color: var(--ink-3); font-variant-numeric: tabular-nums; font-weight: 400; }
+  .toc a:hover { color: var(--ink); }
+  .toc a:hover::before { color: var(--star); }
+
+  /* ---------- Sections ---------- */
+  main section { scroll-margin-top: 84px; }
+  .section { padding-top: clamp(64px, 9vw, 112px); }
+  .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; border-top: 2px solid var(--ink); padding-top: 14px; margin-bottom: clamp(28px, 4vw, 44px); }
+  .section-head h2 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
+  .section-head .num { display: inline-block; min-width: 2.2em; color: var(--ink-3); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .section-head p { margin: 0; color: var(--ink-3); font-size: 15px; text-align: right; }
+
+  /* A subsection: its heading in the left column, the text on the right. */
+  .sub { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 8fr); gap: 12px clamp(32px, 5vw, 72px); }
+  .sub + .sub, .wide + .sub { margin-top: clamp(40px, 5vw, 60px); }
+  .sub + .wide, .wide + .wide { margin-top: clamp(32px, 4vw, 48px); }
+  .sub h3 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.015em; line-height: 1.3; }
+  @media (min-width: 821px) { .sub h3 { position: sticky; top: 96px; align-self: start; } }
+  .prose { max-width: 66ch; }
+  .prose > :first-child { margin-top: 0; }
+  .prose > :last-child { margin-bottom: 0; }
+  .prose p { margin: 0 0 18px; font-size: 18px; line-height: 1.65; }
+  .prose ul, .prose ol { margin: 0 0 18px; padding: 0; list-style: none; display: grid; gap: 12px; }
+  .prose li { position: relative; padding-left: 22px; font-size: 17.5px; line-height: 1.6; color: var(--ink-2); }
+  .prose ul > li::before { content: ""; position: absolute; left: 2px; top: 0.62em; width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--sky); }
+  .prose ol { counter-reset: step; }
+  .prose ol > li { padding-left: 30px; }
+  .prose ol > li::before { counter-increment: step; content: counter(step) "."; position: absolute; left: 0; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .prose li strong, .prose p strong { color: var(--ink); font-weight: 700; }
+  code { font-family: var(--mono); font-size: 0.84em; padding: 1px 5px; border-radius: 4px; background: var(--surface); box-shadow: inset 0 0 0 1px var(--rule); color: var(--ink); white-space: nowrap; }
+
+  /* Tables */
+  .table-scroll { overflow-x: auto; margin: 6px 0 22px; }
+  table { width: 100%; border-collapse: collapse; font-size: 16px; line-height: 1.45; }
+  caption { caption-side: bottom; text-align: left; padding-top: 10px; font-size: 14.5px; color: var(--ink-3); }
+  th { text-align: left; font-weight: 500; font-size: 14px; color: var(--ink-3); padding: 0 16px 8px 0; border-bottom: 1px solid var(--ink-3); vertical-align: bottom; }
+  td { padding: 10px 16px 10px 0; border-bottom: 1px solid var(--rule); vertical-align: top; color: var(--ink-2); }
+  th:last-child, td:last-child { padding-right: 0; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.key code { white-space: nowrap; padding: 0; background: none; box-shadow: none; font-size: 14px; }
+  tr.is-default td { color: var(--ink); font-weight: 500; }
+
+  /* Figures */
+  figure { margin: 0; }
+  figcaption { margin-top: 12px; max-width: 76ch; font-size: 15px; line-height: 1.5; color: var(--ink-3); }
+  figcaption a { color: var(--ink-2); }
+
+  /* The same client in three exports */
+  .exports { display: grid; gap: 0; border-top: 1px solid var(--rule); }
+  .export { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 8fr); gap: 8px clamp(32px, 5vw, 72px); padding: 18px 0 20px; border-bottom: 1px solid var(--rule); }
+  .export h4 { margin: 0; font-size: 17px; font-weight: 700; }
+  .export p { margin: 3px 0 0; font-size: 15px; color: var(--ink-3); }
+  .export .slot { display: inline-flex; align-items: center; gap: 6px; margin: 0 0 8px; padding: 3px 9px; border-radius: 999px; font-size: 12.5px; font-weight: 600; color: var(--cs-accent); box-shadow: inset 0 0 0 1px currentColor; }
+  .export .file { display: block; margin-top: 6px; font-family: var(--mono); font-size: 12.5px; color: var(--ink-3); }
+  .grid-scroll { overflow-x: auto; }
+  .csv { width: auto; min-width: 100%; font-family: var(--mono); font-size: 13.5px; line-height: 1.4; }
+  .csv th { font-family: var(--mono); font-size: 12.5px; font-weight: 600; color: var(--ink-2); border-bottom-color: var(--rule); padding: 0 22px 6px 0; white-space: nowrap; }
+  .csv td { padding: 6px 22px 6px 0; border: 0; color: var(--ink); white-space: nowrap; }
+  .csv td.more { color: var(--ink-3); font-family: var(--font); font-size: 14px; }
+  .csv mark { background: none; color: inherit; box-shadow: inset 0 -2px 0 var(--star); }
+
+  /* The pipeline, in five steps */
+  .flow { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0 clamp(14px, 2vw, 24px); counter-reset: flow; }
+  .flow li { border-top: 2px solid var(--sky); padding-top: 12px; }
+  .flow li::before { counter-increment: flow; content: "Step " counter(flow); display: block; font-size: 14px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .flow b { display: block; margin: 2px 0 6px; font-size: 19px; font-weight: 700; letter-spacing: -0.01em; }
+  .flow span { display: block; font-size: 15.5px; line-height: 1.5; color: var(--ink-2); }
+
+  .shot { border-radius: 8px; overflow: hidden; background: #fff; box-shadow: 0 0 0 1px var(--rule), 0 18px 40px -28px rgba(19, 33, 60, .45); }
+  .shot-scroll { overflow-x: auto; }
+  .shot-hint { display: none; }
+  @media (max-width: 760px) {
+    .shot-scroll img { width: 880px; max-width: none; }
+    .shot-hint { display: inline; }
+  }
+
+  /* Status list */
+  .statuses { margin: 4px 0 22px; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0 22px; }
+  .statuses dt, .statuses dd { padding: 10px 0; border-top: 1px solid var(--rule); }
+  .statuses dt { display: flex; align-items: baseline; gap: 9px; font-weight: 700; font-size: 16.5px; white-space: nowrap; }
+  .statuses dt::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--dot, var(--st-grey)); flex: none; transform: translateY(-1px); }
+  .statuses dd { margin: 0; font-size: 16.5px; line-height: 1.55; color: var(--ink-2); }
+  .st-under { --dot: var(--st-under); } .st-over { --dot: var(--st-over); } .st-plan { --dot: var(--st-plan); } .st-ok { --dot: var(--st-ok); }
+
+  /* Worked example */
+  .calc { margin: 6px 0 22px; padding: 18px 20px 16px; background: var(--surface); border-radius: 8px; box-shadow: inset 0 0 0 1px var(--rule); }
+  .calc h4 { margin: 0 0 10px; font-size: 14.5px; font-weight: 500; color: var(--ink-3); }
+  .calc dl { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+  .calc dt, .calc dd { padding: 8px 0; border-top: 1px solid var(--rule); font-size: 16px; }
+  .calc dt { color: var(--ink-2); padding-right: 16px; }
+  .calc dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
+  .calc .total { border-top: 2px solid var(--ink); font-weight: 700; color: var(--ink); }
+  .calc small { display: block; font-size: 14px; color: var(--ink-3); }
+
+  /* Closing */
+  .closing { padding-bottom: clamp(56px, 8vw, 96px); }
+  .closing-body { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 8fr); gap: 12px clamp(32px, 5vw, 72px); align-items: start; border-top: 2px solid var(--ink); padding-top: 14px; }
+  .closing h2 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
+  .closing p { margin: 0; font-size: 18px; line-height: 1.6; max-width: 52ch; }
+  .closing .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; margin: 22px 0 0; }
+  .button {
+    display: inline-flex; align-items: center; gap: 10px; padding: 12px 20px; border-radius: 4px;
+    background: var(--ink); color: var(--paper); font-weight: 700; font-size: 16px; text-decoration: none;
+  }
+  .button:hover { background: var(--star); color: #fff; }
+  .back { font-weight: 500; }
+
+  footer { padding-bottom: 32px; color: var(--ink-3); font-size: 14px; }
+  .footer-inner { border-top: 1px solid var(--rule); padding-top: 22px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 20px; }
+
+  @media (max-width: 1000px) {
+    .flow { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px clamp(14px, 2vw, 24px); }
+  }
+  @media (max-width: 820px) {
+    .intro-foot, .sub, .export, .closing-body { grid-template-columns: minmax(0, 1fr); }
+    .toc { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .nav { gap: 4px 16px; }
+    .section-head p { display: none; }
+  }
+  @media (max-width: 560px) {
+    .toc { grid-template-columns: 1fr; }
+    .flow { grid-template-columns: 1fr; gap: 18px; }
+    .statuses { grid-template-columns: 1fr; }
+    .statuses dd { border-top: 0; padding-top: 0; }
+    .csv { font-size: 12.5px; }
+    .csv th, .csv td { white-space: normal; padding-right: 12px; }
+    .csv td.nw { white-space: nowrap; }
+    .stack-sm thead { display: none; }
+    .stack-sm tr { display: grid; grid-template-columns: auto auto; justify-content: start; gap: 2px 18px; padding: 10px 0; border-bottom: 1px solid var(--rule); }
+    .stack-sm td { border: 0; padding: 0; text-align: left; }
+    .stack-sm td[data-label]::before { content: attr(data-label); color: var(--ink-3); font-weight: 400; }
+    .stack-sm td:last-child { grid-column: 1 / -1; padding-top: 4px; }
+    .calc dl { grid-template-columns: minmax(0, 1fr); }
+    .calc dd { text-align: left; border-top: 0; padding-top: 0; }
+    .calc dd.total { border-top: 0; }
+  }
+  @media (max-width: 520px) {
+    body { font-size: 16.5px; }
+    .nav a[href$="#about"] { display: none; }
+    .top-inner { height: 64px; }
+    .mark svg { width: 52px; height: 52px; }
+    .prose p { font-size: 17px; }
+    .prose li { font-size: 16.5px; }
+    table { font-size: 15px; }
+    td.key code { white-space: normal; }
+  }
+  @media print {
+    .nav, .skip, .toc { display: none; }
+    .top { position: static; }
+    .sub h3 { position: static; }
+    .section { break-inside: auto; }
+  }
+</style>
+</head>
+<body>
+<a class="skip" href="#content">Skip to the case study</a>
+
+<header class="top">
+ <div class="wrap top-inner">
+  <a class="mark" href="../" aria-label="Christian Tomford, home">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><path fill="#D7192F" d="M16 3l3.1 7.3 7.9-.6-4.9 6.3 4.9 6.3-7.9-.6L16 29l-3.1-7.3-7.9.6 4.9-6.3-4.9-6.3 7.9.6z"/></svg>
+  </a>
+  <nav class="nav" aria-label="Site">
+    <a href="../#projects">Projects</a>
+    <a href="../#about">About</a>
+    <a href="../#contact">Contact</a>
+    <a href="../resume.pdf" rel="noopener" target="_blank">Resume<span class="sr"> (opens in a new tab)</span></a>
+  </nav>
+ </div>
+</header>
+
+<main id="content">
+  <header class="wrap intro">
+    <p class="crumb">
+      <a href="../#projects">Projects</a><span aria-hidden="true">/</span>
+      <svg class="cs-mark" viewBox="0 0 18 18" aria-hidden="true"><rect x="1" y="3" width="7" height="12" rx="1"/><rect class="two" x="10" y="1" width="7" height="12" rx="1"/></svg>
+      <b>CountSift</b><span aria-hidden="true">·</span><span>Case study</span>
+    </p>
+    <h1>How CountSift works</h1>
+    <div class="intro-foot">
+      <p class="lede">CountSift compares what an IT provider bills against the devices and licenses it actually manages. This is how it reads the exports, matches names that each system spells differently, finds the counts that disagree and prices each gap, all inside the browser.</p>
+      <dl class="meta">
+        <dt>Role</dt><dd>Solo project</dd>
+        <dt>Built with</dt><dd>JavaScript, HTML and CSS, plus Papa Parse for CSV</dd>
+        <dt>Runs</dt><dd>In the browser, with no backend</dd>
+        <dt>Live</dt><dd><a href="https://countsift.com" rel="noopener" target="_blank">countsift.com<span class="sr"> (opens in a new tab)</span></a></dd>
+      </dl>
+    </div>
+    <nav aria-label="On this page">
+      <ol class="toc">
+        <li><a href="#problem">The problem</a></li>
+        <li><a href="#pipeline">From CSV files to a comparison</a></li>
+        <li><a href="#reading">Reading the files</a></li>
+        <li><a href="#matching">Matching names</a></li>
+        <li><a href="#comparing">Comparing and pricing</a></li>
+        <li><a href="#browser">Running in the browser</a></li>
+      </ol>
+    </nav>
+  </header>
+
+  <!-- 01 -->
+  <section class="wrap section" id="problem" aria-labelledby="problem-title">
+    <div class="section-head">
+      <h2 id="problem-title"><span class="num" aria-hidden="true">01</span>The problem</h2>
+      <p>Three exports, three ways of counting</p>
+    </div>
+
+    <div class="sub">
+      <h3>Billing and reality drift apart</h3>
+      <div class="prose">
+        <p>A managed IT provider (an MSP) bills each client from its PSA, the system that holds its contracts and invoices: so many managed workstations, servers and Microsoft&nbsp;365 seats, each at a monthly rate. What it actually manages is recorded somewhere else. The RMM agent lists every device that checks in, and Microsoft’s license report lists every seat.</p>
+        <p>When the counts drift apart, the provider is managing devices and licenses it doesn’t bill for. Checking means lining up exports that were never designed to be compared. Here is one client in three of them. All three go into a single drop zone, and CountSift works out from their columns that the first is the <b>billing export</b> and the other two are <b>sources of truth</b>.</p>
+      </div>
+    </div>
+
+    <figure class="wide">
+      <div class="exports">
+        <div class="export">
+          <div>
+            <span class="slot">Detected as: Billing export</span>
+            <h4>PSA billing export</h4>
+            <p>One line per service, with a quantity and a price.</p>
+            <span class="file">lakeshore-psa-billing.csv</span>
+          </div>
+          <div class="grid-scroll" data-scroll-label="Billing export rows">
+            <table class="csv">
+              <thead><tr><th scope="col">Company Name</th><th scope="col">Product</th><th scope="col" class="n">Qty</th><th scope="col" class="n">Unit Price</th></tr></thead>
+              <tbody>
+                <tr><td><mark>Halsted &amp; Grant LLP</mark></td><td><mark>Managed Workstation</mark></td><td class="n">24</td><td class="n">$35.00</td></tr>
+                <tr><td>Halsted &amp; Grant LLP</td><td>Managed Server</td><td class="n">2</td><td class="n">$125.00</td></tr>
+                <tr><td>Halsted &amp; Grant LLP</td><td>Microsoft 365 Business Premium</td><td class="n">26</td><td class="n">$22.00</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="export">
+          <div>
+            <span class="slot">Detected as: Source of truth</span>
+            <h4>RMM device list</h4>
+            <p>One row per device, and no quantity column at all.</p>
+            <span class="file">lakeshore-rmm-devices.csv</span>
+          </div>
+          <div class="grid-scroll" data-scroll-label="RMM device list rows">
+            <table class="csv">
+              <thead><tr><th scope="col">Organization</th><th scope="col">Device Name</th><th scope="col">Device Type</th><th scope="col">Last Contact</th></tr></thead>
+              <tbody>
+                <tr><td><mark>Halsted and Grant</mark></td><td class="nw">HG-WS-01</td><td><mark>Workstation</mark></td><td class="nw">2026-10-07 16:40</td></tr>
+                <tr><td>Halsted and Grant</td><td class="nw">HG-WS-02</td><td>Workstation</td><td class="nw">2026-10-09 09:29</td></tr>
+                <tr><td class="more" colspan="4">… 29 more rows for this client</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="export">
+          <div>
+            <span class="slot">Detected as: Source of truth</span>
+            <h4>Microsoft 365 license report</h4>
+            <p>One row per product, purchased and assigned.</p>
+            <span class="file">lakeshore-m365-licenses.csv</span>
+          </div>
+          <div class="grid-scroll" data-scroll-label="License report rows">
+            <table class="csv">
+              <thead><tr><th scope="col">Customer</th><th scope="col">Product</th><th scope="col" class="n">Licenses</th><th scope="col" class="n">Assigned Licenses</th></tr></thead>
+              <tbody>
+                <tr><td><mark>Halsted and Grant</mark></td><td>Microsoft 365 Business Premium</td><td class="n">26</td><td class="n">26</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <figcaption>The same client in three exports, from CountSift’s test data for a made-up provider, each labeled with the role CountSift detects for it. Underlined: names that differ between files. Some columns are left out.</figcaption>
+    </figure>
+
+    <div class="sub">
+      <h3>Four differences at once</h3>
+      <div class="prose">
+        <ul>
+          <li><strong>Column names.</strong> The client is in Company Name, Organization or Customer, depending on the file.</li>
+          <li><strong>Client names.</strong> Halsted &amp; Grant LLP in billing is Halsted and Grant everywhere else.</li>
+          <li><strong>Product names.</strong> Billing says Managed Workstation; the RMM says Workstation.</li>
+          <li><strong>Shape.</strong> Billing has a quantity on each line. The RMM has a row per device, so the count has to be built from the rows.</li>
+        </ul>
+        <p>CountSift has to get past all four before it can say, for each client and product, what is billed, what is actually there, and what the difference is worth.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 02 -->
+  <section class="wrap section" id="pipeline" aria-labelledby="pipeline-title">
+    <div class="section-head">
+      <h2 id="pipeline-title"><span class="num" aria-hidden="true">02</span>From CSV files to a comparison</h2>
+      <p>The pipeline, and the diagram that shows it</p>
+    </div>
+
+    <ol class="flow wide">
+      <li><b>Read</b><span>Each CSV is parsed in the page into a header row and data rows, then sorted as the billing export or a source.</span></li>
+      <li><b>Map</b><span>Columns are assigned to Customer, Item, Quantity, Monthly rate and Last contact, guessed from the headers.</span></li>
+      <li><b>Clean</b><span>Names become comparison keys, so case, punctuation and endings like LLC stop mattering.</span></li>
+      <li><b>Match</b><span>Clients are paired across files, then products within each client, exactly or by similarity.</span></li>
+      <li><b>Compare</b><span>Billed quantity is set against counted quantity, and each difference is priced at the monthly rate.</span></li>
+    </ol>
+
+    <figure class="wide">
+      <div class="shot">
+        <div class="shot-scroll" data-scroll-label="Mapping diagram">
+          <img src="../assets/countsift-mapping-diagram.webp" width="2144" height="1304" loading="lazy" decoding="async"
+               alt="CountSift's mapping diagram for its sample files. On the left, three files and their mapped columns: billing-psa-export.csv uses Customer, Service, Quantity and Monthly Rate; rmm-device-export.csv uses Client Name, Device Type and Last Seen and counts each row as 1; m365-license-export.csv uses Company, Product and Licenses. The customer and item columns run into a Clean names step, which shows Acme Corp and Acme Corporation becoming the same customer, then into Match (fuzzy, strictness 0.80), then to the comparison's match key. Quantity and rate columns run straight across to Billed quantity, Counted quantity and Monthly rate. Last Seen runs through a Last 30 days step and the device rows through a Count rows step.">
+        </div>
+      </div>
+      <figcaption>The <b>How your files connect</b> diagram on CountSift’s Map columns step, for the built-in sample (a made-up provider). <span class="shot-hint">Scroll sideways to see all of it, or <a href="../assets/countsift-mapping-diagram.webp">open the full-size image</a>. </span>To try it live, open <a href="https://countsift.com" rel="noopener" target="_blank">countsift.com<span class="sr"> (opens in a new tab)</span></a>, choose <i>See a sample report</i>, then <i>See how these files were mapped</i>.</figcaption>
+    </figure>
+
+    <div class="sub">
+      <h3>A diagram drawn from the real settings</h3>
+      <div class="prose">
+        <p>The diagram isn’t an illustration of the pipeline in general. It’s generated as SVG from the same state the comparison runs on: which column each file uses for each field, whether the 30-day device filter is on, and whether matching is fuzzy or exact and how strict. Change any of them and it redraws. The clean-up step even shows a real pair of names from the loaded files that become the same key, such as Acme Corp and Acme Corporation.</p>
+        <ul>
+          <li>Quantity and rate columns run to the comparison on their own horizontal lanes, and the boxes in the middle are laid out around those lanes, so no line crosses a box.</li>
+          <li>Each line carries the ids of everything on its path. Hovering a column, step or comparison row highlights its whole route, and clicking a column jumps to its picker.</li>
+          <li>Screen readers get an <code>aria-label</code> written from the same data, file by file and column by column.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 03 -->
+  <section class="wrap section" id="reading" aria-labelledby="reading-title">
+    <div class="section-head">
+      <h2 id="reading-title"><span class="num" aria-hidden="true">03</span>Reading the files</h2>
+      <p>CSV parsing, file roles, column mapping, guardrails</p>
+    </div>
+
+    <div class="sub">
+      <h3>Parsing</h3>
+      <div class="prose">
+        <p>Files are parsed with Papa Parse, loaded from a CDN. If that script can’t load, for example offline or on a locked-down office network, a small built-in RFC&nbsp;4180 parser takes over. It handles quoted fields, doubled quotes and line breaks inside quotes, guesses the delimiter (comma, semicolon, tab or pipe) from the header line, and drops the byte-order mark Excel adds. The page footer says when the fallback is in use.</p>
+        <p>Numbers are read the way exports write them: <code>1,250</code>, <code>$25.00</code> and the accounting-style <code>(3)</code> all parse.</p>
+      </div>
+    </div>
+
+    <div class="sub">
+      <h3>Guessing the columns</h3>
+      <div class="prose">
+        <p>Each field has a ranked list of header names that usually mean it. A header that equals a candidate scores higher than one that only contains it, earlier candidates win ties, and each column can be used only once. On the test exports this maps Company Name to Customer, Product to Item, Qty to Quantity and Unit Price to Monthly rate without any help. The guess is shown over a preview of each file, and every choice can be changed.</p>
+        <p>Only Customer is required. Two defaults let device lists work without reshaping them:</p>
+        <ul>
+          <li>With no Quantity column mapped, each row counts as one, which is right for an RMM export where every row is a device.</li>
+          <li>With Item mapped to the device type, Halsted &amp; Grant’s 31 device rows become two counts, workstations and servers.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="sub">
+      <h3>Telling the files apart</h3>
+      <div class="prose">
+        <p>All the exports go into one drop zone, so CountSift first works out which file is the billing export. It runs the same column guesser on each file and checks the values under what it finds: a price column of numbers next to a quantity suggests the billing export, device names with a last-contact date suggest a device list, and Licenses or Seats columns a license report. Prices alone don’t decide it: a vendor invoice from a distributor like Pax8 has them too, and its supplier columns, such as SKU or Term, count against it. Each file shows the role it was given and why, an unsure guess is marked, and one click switches a role. When no file looks like a billing export, or more than one does, CountSift asks instead of picking.</p>
+      </div>
+    </div>
+
+    <div class="sub">
+      <h3>Guarding against bad input</h3>
+      <div class="prose">
+        <ul>
+          <li><strong>The same file twice.</strong> CountSift fingerprints each file’s text with an FNV-1a hash and skips an identical file with a notice. A second file with the same name, columns and row count is skipped too.</li>
+          <li><strong>Values that aren’t numbers.</strong> A quantity like <code>n/a</code> marks its line <i>Couldn’t compare</i> instead of counting as 0, which would create a gap that isn’t there. Rows with no client name are skipped. Both are listed above the results, once per file.</li>
+          <li><strong>Devices that have gone quiet.</strong> When a device list has a Last contact column, devices not seen in the 30 days before the newest check-in in that file are left out (on by default, and reported). It counts back from the newest date in the file rather than today, so an export pulled a month ago isn’t emptied for being old. In the test RMM export, that sets aside four devices, two of them Halsted &amp; Grant workstations last seen in July and August.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 04 -->
+  <section class="wrap section" id="matching" aria-labelledby="matching-title">
+    <div class="section-head">
+      <h2 id="matching-title"><span class="num" aria-hidden="true">04</span>Matching names</h2>
+      <p>Normalization, then fuzzy matching</p>
+    </div>
+
+    <div class="sub">
+      <h3>Clean by rule first</h3>
+      <div class="prose">
+        <p>Every client and product name becomes a key before anything is compared. The key is lower-cased, <code>&amp;</code> is read as “and”, periods are dropped (so L.L.C. becomes <code>llc</code>), any other character that isn’t a plain letter or digit becomes a space, and common abbreviations are expanded: M365 to Microsoft&nbsp;365, Svr to Server, Sq to Square, St to Street. Client names also lose a leading “The” and trailing words like Inc, LLC, Corp, Co, Group or Agency, as long as one word is left.</p>
+        <div class="table-scroll" data-scroll-label="Name clean-up examples">
+          <table>
+            <caption>Pairs from the test exports, with the key both names reduce to.</caption>
+            <thead><tr><th scope="col">Billing export</th><th scope="col">Source export</th><th scope="col">Key</th></tr></thead>
+            <tbody>
+              <tr><td>Halsted &amp; Grant LLP</td><td>Halsted and Grant</td><td class="key"><code>halsted and grant</code></td></tr>
+              <tr><td>Lincoln Square Insurance Agency</td><td>Lincoln Sq Insurance</td><td class="key"><code>lincoln square insurance</code></td></tr>
+              <tr><td>The Kedzie Group</td><td>Kedzie Group</td><td class="key"><code>kedzie</code></td></tr>
+              <tr><td>Brightwater Dental, PLLC</td><td>Brightwater Dental</td><td class="key"><code>brightwater dental</code></td></tr>
+              <tr><td>Exchange Online Plan 1</td><td>Exchange Online (Plan 1)</td><td class="key"><code>exchange online plan 1</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>These differences are predictable, so rules handle them, and the rules apply in both matching modes. That leaves the similarity score for what rules can’t catch: typos, spacing and extra words.</p>
+      </div>
+    </div>
+
+    <div class="sub">
+      <h3>Then score what’s left</h3>
+      <div class="prose">
+        <p>In fuzzy mode, names that still differ are compared word by word. Each word of the shorter name is paired with its closest unused word in the longer one. An identical word scores 1; otherwise the score is the Dice coefficient of the two words’ letter pairs, so a typo still scores high. Words scoring under 0.5 count as 0, and the name’s score is the average over the shorter name’s words.</p>
+        <div class="table-scroll" data-scroll-label="Similarity score examples">
+          <table>
+            <thead><tr><th scope="col">Name</th><th scope="col">Compared with</th><th scope="col" class="n">Score</th></tr></thead>
+            <tbody>
+              <tr><td>Workstation</td><td>Managed Workstation</td><td class="n">1.00</td></tr>
+              <tr><td>Ravenswood Architects</td><td>Ravenswood Architecture</td><td class="n">0.90</td></tr>
+              <tr><td>Northshore Pediatrics</td><td>North Shore Pediatrics</td><td class="n">0.83</td></tr>
+              <tr><td>Microsoft 365 Business Standard</td><td>Microsoft 365 Business Premium</td><td class="n">0.75</td></tr>
+              <tr><td>Microsoft 365 E3</td><td>Microsoft 365 E5</td><td class="n">0.67</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Because the shorter name drives the score, an extra word costs nothing: Workstation is fully contained in Managed Workstation. A different word does cost something, which is what keeps plan tiers apart: Standard and Premium share no letter pairs.</p>
+        <p>Pairing is one-to-one. Exact key matches pair first. Every remaining pair at or above the strictness threshold becomes a candidate, and candidates are taken highest score first, each name used once. Clients are matched across files first, then products within each matched client.</p>
+      </div>
+    </div>
+
+    <div class="sub">
+      <h3>Strictness is a trade-off</h3>
+      <div class="prose">
+        <p>The threshold is a slider from 0.50 to 1.00 under <i>Advanced matching</i>, set to 0.80 by default. On the test exports (billing, RMM, license and backup reports), moving it changes the answer in both directions:</p>
+        <div class="table-scroll" data-scroll-label="Results at three strictness settings">
+          <table class="stack-sm">
+            <thead><tr><th scope="col">Strictness</th><th scope="col" class="n">Missed revenue per month</th><th scope="col">What changes</th></tr></thead>
+            <tbody>
+              <tr><td data-label="Strictness ">0.65</td><td class="n" data-label="Per month ">$448.00</td><td>Business Standard now “matches” Business Premium, so a client billed for the cheaper plan while using the more expensive one is no longer flagged.</td></tr>
+              <tr class="is-default"><td data-label="Strictness ">0.80</td><td class="n" data-label="Per month ">$562.00</td><td>The default. Plan tiers stay apart, and Northshore still matches North Shore.</td></tr>
+              <tr><td data-label="Strictness ">0.85</td><td class="n" data-label="Per month ">$1,164.00</td><td>Northshore Pediatrics (0.83) no longer matches North Shore Pediatrics, so one real client shows up as an unbilled one worth $610 a month.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p><i>Exact</i> mode turns fuzzy pairing off. On the same files it finds 11 clients instead of 9 and 14 billed lines it can’t find in any source, because, for example, Managed Workstation and Workstation are different strings, and so are Ravenswood Architects and Ravenswood Architecture.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 05 -->
+  <section class="wrap section" id="comparing" aria-labelledby="comparing-title">
+    <div class="section-head">
+      <h2 id="comparing-title"><span class="num" aria-hidden="true">05</span>Comparing and pricing</h2>
+      <p>Discrepancies and their monthly impact</p>
+    </div>
+
+    <div class="sub">
+      <h3>Aggregate, then compare</h3>
+      <div class="prose">
+        <p>Each file is reduced to client → product → quantity by summing its rows. When several rows bill the same product at different prices, the rate is their quantity-weighted average. Source files are merged. If two of them count the same client and product, CountSift uses the higher count rather than adding them, and marks the line <i>Sources disagree</i> when the counts differ.</p>
+        <p>Every billed line and every unbilled source item then gets one status:</p>
+        <dl class="statuses">
+          <dt class="st-under">Under-billed</dt><dd>The source counts more than is billed. This includes products, and whole clients, with no billing line.</dd>
+          <dt class="st-over">Over-billed</dt><dd>More is billed than the source counts.</dd>
+          <dt class="st-plan">Plan mismatch</dt><dd>Billed for one plan while the source shows another plan of the same product, in the same quantity.</dd>
+          <dt class="st-ok">Matched</dt><dd>The counts agree.</dd>
+          <dt>Not in source</dt><dd>A billed line with no counterpart in a file that covers that kind of product. It’s listed for review and left out of the dollar totals.</dd>
+          <dt>Not checked</dt><dd>A billed line for a product no source file covers, like Cloud Backup with no backup report loaded. A missing match there says nothing about the client, only about the files, so the line isn’t counted against them. The report suggests which export would check it.</dd>
+          <dt>Couldn’t compare</dt><dd>A quantity on either side isn’t a number.</dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="sub">
+      <h3>Plan mismatches</h3>
+      <div class="prose">
+        <p>A client billed for one Microsoft&nbsp;365 plan while using another would otherwise show up as two unrelated problems: a billed line that isn’t in the source, and an unbilled product. CountSift pairs them into one finding when, within a client, the two names share at least their first two words and the quantities are equal. Business Standard and Business Premium share three words (“microsoft 365 business”). Managed Workstation and Managed Server share one, so they stay separate products.</p>
+        <div class="calc">
+          <h4>Ravenswood Architects, from the test exports</h4>
+          <dl>
+            <dt>Billed</dt><dd>12 × Business Standard at $12.50</dd>
+            <dt>In use, per the license report</dt><dd>12 × Business Premium</dd>
+            <dt>Business Premium rate<small>as billed to other clients, marked est.</small></dt><dd>$22.00</dd>
+            <dt class="total">Monthly impact: 12 × ($22.00 − $12.50)</dt><dd class="total">+$114.00</dd>
+          </dl>
+        </div>
+      </div>
+    </div>
+
+    <div class="sub">
+      <h3>Where the prices come from</h3>
+      <div class="prose">
+        <p>Dollar figures use the billing export’s monthly rate: the difference times the rate, and that times 12 for the year. An unbilled product has no billing line to take a rate from, so CountSift borrows one, in this order:</p>
+        <ol>
+          <li>The rate billed for exactly the same product, after clean-up, at other clients (the most common one, if they differ).</li>
+          <li>Otherwise, the rate of the billing line that this source item was matched to at other clients. Wicker Park Yoga appears in the RMM and license report but isn’t billed at all. Its three RMM workstations are priced at $35.00, the Managed Workstation rate that the RMM’s “Workstation” matched at other clients.</li>
+        </ol>
+        <p>It never borrows from a product that only looks similar. In the built-in sample, no one is billed for Business Basic, so a client’s 10 unbilled Business Basic seats are listed with no rate and counted separately, not priced at Business Premium’s $22.00. Borrowed rates are marked <i>est.</i> in the table, and the summary says how much of the total depends on them. On the test exports that’s $562.00 a month, including $283.00 at estimated rates.</p>
+      </div>
+    </div>
+
+    <div class="sub">
+      <h3>Totals that don’t hide anything</h3>
+      <div class="prose">
+        <p>A client can be under-billed on one line and over-billed on another. The client’s row shows both figures stacked, never one net number (Northshore Pediatrics: +$8.00 under, −$35.00 over), so money the provider is owed doesn’t disappear behind a credit it may owe back. Quantities aren’t totalled per client at all, because workstations plus license seats isn’t a meaningful number. And with no price column mapped, the revenue figure reads “—” with a prompt to map one, not $0.00.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 06 -->
+  <section class="wrap section" id="browser" aria-labelledby="browser-title">
+    <div class="section-head">
+      <h2 id="browser-title"><span class="num" aria-hidden="true">06</span>Running in the browser</h2>
+      <p>Architecture and trade-offs</p>
+    </div>
+
+    <div class="sub">
+      <h3>No backend</h3>
+      <div class="prose">
+        <p>The page reads each file with the browser’s File API, and parsing, matching and the comparison all run in that tab. The CSV report is built in the page and downloaded as a Blob, and printing uses the browser’s own print. There are no accounts, no cookies and nothing saved in the browser. Billing exports carry client names and prices; with no server there is nothing to upload, store or secure, and the privacy page can say so plainly. The only library is Papa Parse.</p>
+        <p>Analytics needed one workaround. Cloudflare Web Analytics, which Cloudflare adds to the page, counts page views. To count finished comparisons the app changes the address to a fixed <code>/results</code> (or <code>/sample</code>) with the History API when results appear. Nothing from the files ever goes into the URL, and a refresh on either path loads the app from the start.</p>
+      </div>
+    </div>
+
+    <div class="sub">
+      <h3>One file, with the engine kept apart</h3>
+      <div class="prose">
+        <p>The application is one JavaScript file with no build step (plus a small file of embedded sample data), in numbered sections: state, utilities, CSV parsing, column detection, the matching engine, views, report export and wiring. The comparison itself never touches the page. One function, <code>computeResults()</code>, runs a whole comparison from the loaded files and settings and returns rows, client groups, a summary and notes for the views to render. The progress animation shown during a run calls the same function, so its checklist shows the comparison’s real counts rather than placeholder steps.</p>
+        <p>It ships as a static site on Cloudflare Pages. After a browser once ran a cached older <code>app.js</code> against a newer page and broke on load, the site’s own CSS and JS URLs got a version tag taken from a hash of each file. A small script stamps the tags whenever those files change, and the tests fail if one is out of date.</p>
+      </div>
+    </div>
+
+    <div class="sub">
+      <h3>Testing</h3>
+      <div class="prose">
+        <p>An end-to-end suite drives the real page in headless Chromium with Playwright. It runs the sample and the test exports and checks their totals and specific lines against expected results documented with the test data, such as Lincoln Sq Insurance matching Lincoln Square Insurance Agency and Ravenswood showing as a single $114 plan mismatch. It also covers how each test file is sorted, each guardrail above, the mapping diagram and layouts at phone widths, and it runs the whole flow on the built-in fallback parser.</p>
+      </div>
+    </div>
+
+    <div class="sub">
+      <h3>Trade-offs and limits</h3>
+      <div class="prose">
+        <ul>
+          <li><strong>Nothing persists.</strong> Column mappings aren’t remembered between visits yet, and with no server a reconciliation can’t run on its own each month.</li>
+          <li><strong>Matching is one-to-one.</strong> There’s no way yet to say that several source items count toward one billing line, such as Laptop and Desktop toward Managed Workstation.</li>
+          <li><strong>The rules live in code.</strong> The abbreviation list and the list of trailing company words are fixed, so a provider’s own shorthand has to be added there.</li>
+          <li><strong>CSV only.</strong> Excel workbooks have to be saved as CSV first.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap section closing" aria-labelledby="closing-title">
+    <div class="closing-body">
+      <h2 id="closing-title">Try it</h2>
+      <div>
+        <p>CountSift has a built-in sample report, so you can see everything above without any files of your own.</p>
+        <p class="actions">
+          <a class="button" href="https://countsift.com" rel="noopener" target="_blank">Open countsift.com<span class="sr"> (opens in a new tab)</span></a>
+          <a class="back" href="../#projects">Back to projects</a>
+        </p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="wrap">
+  <div class="footer-inner">
+    <span>© 2026 Christian Tomford</span>
+    <span>Chicago</span>
+  </div>
+</footer>
+<script>
+  // Give the top bar a background once the page scrolls.
+  (() => {
+    const bar = document.querySelector('.top');
+    const update = () => bar.classList.toggle('is-scrolled', window.scrollY > 16);
+    window.addEventListener('scroll', update, { passive: true });
+    update();
+  })();
+  // Boxes that scroll sideways on small screens: reachable by keyboard only while they actually scroll.
+  (() => {
+    const boxes = document.querySelectorAll('[data-scroll-label]');
+    const update = () => boxes.forEach(el => {
+      if (el.scrollWidth > el.clientWidth + 1) {
+        el.tabIndex = 0; el.setAttribute('role', 'region'); el.setAttribute('aria-label', el.dataset.scrollLabel);
+      } else {
+        el.removeAttribute('tabindex'); el.removeAttribute('role'); el.removeAttribute('aria-label');
+      }
+    });
+    window.addEventListener('resize', update, { passive: true });
+    window.addEventListener('load', update);
+    update();
+  })();
+</script>
+</body>
+</html>
