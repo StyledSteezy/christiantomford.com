@@ -50,19 +50,3 @@ git add .
 git commit -m "Describe the change"
 git push
 ```
-
-## Domain and DNS
-
-The site's address is `www.christiantomford.com`, set in Settings → Pages and stored in the `CNAME` file. The bare `christiantomford.com` redirects to it. GitHub issues and renews the HTTPS certificate automatically.
-
-The domain is registered at Squarespace, and its DNS is managed there (account.squarespace.com → Domains → christiantomford.com → DNS). The records for the site are:
-
-| Type | Name | Value |
-| --- | --- | --- |
-| A | @ | 185.199.108.153 |
-| A | @ | 185.199.109.153 |
-| A | @ | 185.199.110.153 |
-| A | @ | 185.199.111.153 |
-| CNAME | www | styledsteezy.github.io |
-
-**Do not touch the MX or TXT records, or the `wj4ixiuqgv5h` CNAME.** They run Google Workspace email for the domain.
